@@ -1,0 +1,283 @@
+﻿using OpenTK.Graphics.OpenGL;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.Design;
+using System.Diagnostics;
+using System.Numerics;
+using System.Text;
+
+namespace Voxel_Raytracer
+{
+    internal class Terrain
+    {
+        static int chunkSize = 128;
+        static int worldHeight = 128;
+        
+        
+
+
+        public double scale = 0.01 / (64.0 / chunkSize);
+        public double squishFactor = 64.0; // defaulted 64
+        public double baseHeight = worldHeight * 0.5;
+
+        Vector3 lightDir = Vector3.Normalize(new Vector3(1, -1.0f, 0f));
+
+        bool IsInShadow(int x, int y, int z, byte[] data)
+        {
+            const int maxSteps = 128;
+            float step = 0.9f;        // Now stepping nearly 1 voxel unit
+            float epsilon = 0.05f;    // Bias must be larger than before
+
+            // 1. Start at the center of the current voxel
+            float fx = x + 0.5f;
+            float fy = y + 0.5f;
+            float fz = z + 0.5f;
+
+            // 2. Bias the starting point *towards* the light source, pushing the ray *away* from the current block
+            fx += lightDir.X * epsilon;
+            fy += lightDir.Y * epsilon;
+            fz += lightDir.Z * epsilon;
+
+            for (int i = 0; i < maxSteps; i++)
+            {
+                // 3. Raymarch *away* from the light source
+                fx -= lightDir.X * step;
+                fy -= lightDir.Y * step;
+                fz -= lightDir.Z * step;
+
+                int ix = (int)fx;
+                int iy = (int)fy;
+                int iz = (int)fz;
+
+                // No need for the (ix == x) skip check here, as the bias and larger step should have pushed it out.
+
+                if (ix < 0 || iy < 0 || iz < 0 ||
+                    ix >= chunkSize || iy >= chunkSize || iz >= chunkSize)
+                    return false; // ray left the chunk
+
+                int idx = 4 * (iz + chunkSize * (iy + chunkSize * ix));
+                if (data[idx + 3] == 255)
+                    return true; // hit solid voxel
+            }
+
+            return false;
+        }
+        public byte[] GenerateChunk(Vector3 chunkCoords)
+        {
+
+            var watch = new Stopwatch();
+            watch.Start();
+
+            // R, G, B, filled
+            var result = new byte[chunkSize * chunkSize * chunkSize * 4];
+            int arraySize = result.Length;
+            var perlin = new PerlinNoise(seed: 1234);
+
+            Random rnd = new Random();
+
+            Vector3 offset = new Vector3(chunkCoords.X * chunkSize, chunkCoords.Y * chunkSize, chunkCoords.Z * chunkSize);
+
+            for (int x = 0; x < chunkSize; x++)
+                for (int z = 0; z < chunkSize; z++)
+                {
+                    double xzSquish = 64.0 * Math.Clamp(Math.Pow(perlin.Noise(x, z, 1) + 1, 2), 0.5, 1.5);
+
+                    for (int y = 0; y < chunkSize; y++)
+                    {
+                        double worldX = x + offset.X;
+                        double worldY = y + offset.Y;
+                        double worldZ = z + offset.Z;
+
+                        int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
+
+                        double density = perlin.FBM(worldX * scale, worldZ * scale, worldY * scale);
+
+                        double densityModifier = (baseHeight - worldY) / xzSquish;
+
+                        double finalDensity = density + densityModifier;
+
+                        if (finalDensity > 0.9)
+                        {
+                            double lightDiff = 10 * rnd.NextDouble();
+                            // solid material
+                            result[baseIndex] = (byte)(200 + lightDiff); // R
+                            result[baseIndex + 1] = (byte)(200 + lightDiff); // G
+                            result[baseIndex + 2] = (byte)(200 + lightDiff); // B
+                            result[baseIndex + 3] = 255; // filled (1.0f)
+                        }
+                        else
+                        {
+                            // air
+                            result[baseIndex] = 0;
+                            result[baseIndex + 1] = 0;
+                            result[baseIndex + 2] = 0;
+                            result[baseIndex + 3] = 0;
+                        }
+
+                    }
+                }
+
+
+            for (int x = 0; x < chunkSize; x++)
+                for (int y = 0; y < chunkSize; y++)
+                    for (int z = 0; z < chunkSize; z++)
+                    {
+                        int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
+
+                        if (result[baseIndex + 3] == 0) continue;
+
+                        // check above
+                        int above1 = 4 * (z + chunkSize * ((y + 1) + chunkSize * x));
+                        int above2 = 4 * (z + chunkSize * ((y + 2) + chunkSize * x));
+
+                        if (above1+3 > arraySize || above2+3 > arraySize) continue;
+
+                        if (result[above1 + 3] == 0 && result[above2 + 3] == 0)
+                        {
+                            // make base block grass
+                            double lightDiff = 10 * rnd.NextDouble();
+                            result[baseIndex] = (byte)(168 + lightDiff); // R
+                            result[baseIndex + 1] = (byte)(208 + lightDiff); // G
+                            result[baseIndex + 2] = (byte)(141 + lightDiff); // 
+                        }
+                        else
+                            continue;
+
+                            // make bottom ones dirt if they do exist
+
+                            int below1 = 4 * (z + chunkSize * ((y - 1) + chunkSize * x));
+                        int below2 = 4 * (z + chunkSize * ((y - 2) + chunkSize * x));
+                        int below3 = 4 * (z + chunkSize * ((y - 3) + chunkSize * x));
+
+                        if (below1 >= 0)
+                        {
+                            if (result[below1 + 3] == 255)
+                            {
+                                // make dirt
+                                double lightDiff = 10 * rnd.NextDouble();
+                                result[below1] = (byte)(124 + lightDiff); // R
+                                result[below1 + 1] = (byte)(94 + lightDiff); // G
+                                result[below1 + 2] = (byte)(74 + lightDiff); // B
+                            }
+                        }
+
+
+                        if (below2 >= 0)
+                        {
+                            if (result[below2 + 3] == 255)
+                            {
+                                // make dirt
+                                double lightDiff = 10 * rnd.NextDouble();
+                                result[below2] = (byte)(124 + lightDiff); // R
+                                result[below2 + 1] = (byte)(94 + lightDiff); // G
+                                result[below2 + 2] = (byte)(74 + lightDiff); // B
+                            }
+                        }
+
+                        if (below3 >= 0)
+                        {
+                            if (result[below3 + 3] == 255)
+                            {
+                                // make dirt
+                                double lightDiff = 10 * rnd.NextDouble();
+                                result[below3] = (byte)(124 + lightDiff); // R
+                                result[below3 + 1] = (byte)(94 + lightDiff); // G
+                                result[below3 + 2] = (byte)(74 + lightDiff); // B
+                            }
+                        }
+
+                    }
+            
+            
+            // lighting
+            for (int x = 0; x < chunkSize; x++)
+                for (int y = 0; y < chunkSize; y++)
+                    for (int z = 0; z < chunkSize; z++)
+                    {
+                        int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
+                        if (result[baseIndex + 3] == 0)
+                            continue;
+
+                        bool shadow = IsInShadow(x, y, z, result);
+
+                        float shade = shadow ? 0.7f : 1.0f; // darken if shadow
+
+                        result[baseIndex] = (byte)(result[baseIndex] * shade);
+                        result[baseIndex + 1] = (byte)(result[baseIndex + 1] * shade);
+                        result[baseIndex + 2] = (byte)(result[baseIndex + 2] * shade);
+                    }
+
+
+
+            float[,,] shadowBuf = new float[chunkSize, chunkSize, chunkSize];
+
+            for (int x = 0; x < chunkSize; x++)
+                for (int y = 0; y < chunkSize; y++)
+                    for (int z = 0; z < chunkSize; z++)
+                    {
+                        int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
+                        if (result[baseIndex + 3] == 0)
+                            continue;
+
+                        bool shadow = IsInShadow(x, y, z, result);
+                        shadowBuf[x, y, z] = shadow ? 0f : 1f;
+                    }
+
+            // 2. Blur the shadow buffer (diffusion kernel)
+            float[,,] blurred = new float[chunkSize, chunkSize, chunkSize];
+
+            int radius = 2; // 2–3 is enough for smoothing
+
+            for (int x = 0; x < chunkSize; x++)
+                for (int y = 0; y < chunkSize; y++)
+                    for (int z = 0; z < chunkSize; z++)
+                    {
+                        float sum = 0f;
+                        int count = 0;
+
+                        for (int dx = -radius; dx <= radius; dx++)
+                            for (int dy = -radius; dy <= radius; dy++)
+                                for (int dz = -radius; dz <= radius; dz++)
+                                {
+                                    int nx = x + dx;
+                                    int ny = y + dy;
+                                    int nz = z + dz;
+
+                                    if (nx < 0 || ny < 0 || nz < 0 ||
+                                        nx >= chunkSize || ny >= chunkSize || nz >= chunkSize)
+                                        continue;
+
+                                    sum += shadowBuf[nx, ny, nz];
+                                    count++;
+                                }
+
+                        blurred[x, y, z] = sum / count; // average = local light amount
+                    }
+
+            // 3. Apply smoothed shadow factor to block colors
+            for (int x = 0; x < chunkSize; x++)
+                for (int y = 0; y < chunkSize; y++)
+                    for (int z = 0; z < chunkSize; z++)
+                    {
+                        int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
+                        if (result[baseIndex + 3] == 0)
+                            continue;
+
+                        float light = 0.7f + blurred[x, y, z] * 0.4f;
+                        // 0.6 = full shadow
+                        // 1.0 = full light
+                        // softens in-between
+
+                        result[baseIndex] = (byte)(result[baseIndex] * light);
+                        result[baseIndex + 1] = (byte)(result[baseIndex + 1] * light);
+                        result[baseIndex + 2] = (byte)(result[baseIndex + 2] * light);
+                    }
+
+
+            watch.Stop();
+            var elapsedMs = watch.ElapsedMilliseconds;
+            Console.WriteLine($"{elapsedMs}ms");
+            return result;
+        }
+    }
+}
