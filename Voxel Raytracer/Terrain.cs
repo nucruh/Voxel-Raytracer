@@ -10,14 +10,14 @@ namespace Voxel_Raytracer
 {
     internal class Terrain
     {
-        static int chunkSize = 128;
+        public int chunkSize = 128;
         static int worldHeight = 128;
-        
-        
 
 
-        public double scale = 0.01 / (64.0 / chunkSize);
-        public double squishFactor = 64.0; // defaulted 64
+
+        public float resolution = 2.0f;
+        public double scale = 0.04;
+        public double squishFactor = 48.0; // defaulted 64
         public double baseHeight = worldHeight * 0.5;
 
         Vector3 lightDir = Vector3.Normalize(new Vector3(1, -1.0f, 0f));
@@ -80,7 +80,7 @@ namespace Voxel_Raytracer
             for (int x = 0; x < chunkSize; x++)
                 for (int z = 0; z < chunkSize; z++)
                 {
-                    double xzSquish = 64.0 * Math.Clamp(Math.Pow(perlin.Noise(x, z, 1) + 1, 2), 0.5, 1.5);
+                    double xzSquish = squishFactor * Math.Clamp(Math.Pow(perlin.Noise(x + offset.X, z + offset.Z, 1) + 1, 2), 0.5, 1.5);
 
                     for (int y = 0; y < chunkSize; y++)
                     {
@@ -90,7 +90,12 @@ namespace Voxel_Raytracer
 
                         int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
 
-                        double density = perlin.FBM(worldX * scale, worldZ * scale, worldY * scale);
+                        double sampleX = (worldX / resolution) * scale;
+                        double sampleY = (worldY / resolution) * scale;
+                        double sampleZ = (worldZ / resolution) * scale;
+
+                        double density = perlin.FBM(sampleX, sampleZ, sampleY);
+
 
                         double densityModifier = (baseHeight - worldY) / xzSquish;
 
@@ -136,16 +141,18 @@ namespace Voxel_Raytracer
                         {
                             // make base block grass
                             double lightDiff = 10 * rnd.NextDouble();
-                            result[baseIndex] = (byte)(168 + lightDiff); // R
-                            result[baseIndex + 1] = (byte)(208 + lightDiff); // G
-                            result[baseIndex + 2] = (byte)(141 + lightDiff); // 
+                            result[baseIndex] = (byte)(80 + lightDiff); // R
+                            result[baseIndex + 1] = (byte)(180 + lightDiff); // G
+                            result[baseIndex + 2] = (byte)(70 + lightDiff); //
+
+
                         }
                         else
                             continue;
 
                             // make bottom ones dirt if they do exist
 
-                            int below1 = 4 * (z + chunkSize * ((y - 1) + chunkSize * x));
+                        int below1 = 4 * (z + chunkSize * ((y - 1) + chunkSize * x));
                         int below2 = 4 * (z + chunkSize * ((y - 2) + chunkSize * x));
                         int below3 = 4 * (z + chunkSize * ((y - 3) + chunkSize * x));
 
@@ -263,7 +270,7 @@ namespace Voxel_Raytracer
                         if (result[baseIndex + 3] == 0)
                             continue;
 
-                        float light = 0.7f + blurred[x, y, z] * 0.4f;
+                        float light = 0.7f + blurred[x, y, z] * 1f;
                         // 0.6 = full shadow
                         // 1.0 = full light
                         // softens in-between

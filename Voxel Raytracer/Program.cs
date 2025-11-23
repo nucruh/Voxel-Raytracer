@@ -15,6 +15,15 @@ namespace Voxel_Raytracer
 {
     // --- Step 3: Program Class with Main Entry Point ---
     // This static class runs the Renderer when the application starts.
+
+    class Chunk
+    {
+        public Vector3i coords;   // chunk coordinates
+        public int textureId;     // GPU texture
+        public required byte[] voxelData;  // voxel array
+        public int size;          // chunk size (assume cube)
+    }
+
     public static class Program
     {
         public static void Main()
@@ -29,8 +38,8 @@ namespace Voxel_Raytracer
     public class Renderer : GameWindow
     {
 
-        static int width = 1920;
-        static int height = 1080;
+        static int width = 960;
+        static int height = 540;
 
 
         float yaw = 0.0f; // y
@@ -38,7 +47,7 @@ namespace Voxel_Raytracer
 
         Vector3 camPos = new Vector3(0f, 0f, -3f);
         float mouseSensitivity = 0.0015f;
-        float moveSpeed = 1f;
+        float moveSpeed = 30f;
 
         Vector3 cameraForward => new Vector3(
             MathF.Cos(pitch) * MathF.Sin(yaw),
@@ -88,15 +97,7 @@ namespace Voxel_Raytracer
             int frag = LoadShader("shaders/voxel.glsl", ShaderType.FragmentShader);
 
             // passtrough .vert shader
-            int vert = GL.CreateShader(ShaderType.VertexShader);
-            GL.ShaderSource(vert, @"#version 330 core
-            layout(location = 0) in vec2 aPos;
-            void main() {
-                gl_Position = vec4(aPos, 0.0, 1.0);
-            }
-            ");
-            GL.CompileShader(vert);
-
+            int vert = LoadShader("shaders/voxel.vert", ShaderType.VertexShader);
             // Link program
             int program = GL.CreateProgram();
             GL.AttachShader(program, vert);
@@ -132,34 +133,73 @@ namespace Voxel_Raytracer
             return vao;
         }
 
-        protected override void OnLoad()
+        int UploadVoxelChunk(byte[] data, int size)
         {
-            int chunkSize = 128;
-            base.OnLoad();
-            this.CursorState = CursorState.Grabbed;
+            int tex = GL.GenTexture();
 
-            var TerrainGenerator = new Terrain();
-            byte[] voxelChunkResult = TerrainGenerator.GenerateChunk(new System.Numerics.Vector3(0, 0, 0));
+            GL.BindTexture(TextureTarget.Texture3D, tex);
+            GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.Rgba8,
+                          size, size, size, 0,
+                          PixelFormat.Rgba, PixelType.UnsignedByte, data);
 
-            // Build shader program first
-            program = BuildShader();
-            GL.UseProgram(program);
-
-            // Upload voxel texture
-            int voxelTex = GL.GenTexture();
-            GL.BindTexture(TextureTarget.Texture3D, voxelTex);
-            GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.Rgba8, chunkSize, chunkSize, chunkSize, 0, PixelFormat.Rgba, PixelType.UnsignedByte, voxelChunkResult);
             GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
             GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
             GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
 
-            GL.ActiveTexture(TextureUnit.Texture0);
-            GL.BindTexture(TextureTarget.Texture3D, voxelTex);
 
-            int locTex = GL.GetUniformLocation(program, "uVoxelTex");
-            GL.Uniform1(locTex, 0);
+            return tex;
+        }
+
+        protected override void OnLoad()
+        {
+            base.OnLoad();
+            this.CursorState = CursorState.Grabbed;
+
+            var TerrainGenerator = new Terrain();
+            int chunkSize = TerrainGenerator.chunkSize;
+
+            byte[] chunk0Data = TerrainGenerator.GenerateChunk(new System.Numerics.Vector3(0, 0, 0));
+            int tex0 = UploadVoxelChunk(chunk0Data, chunkSize);
+
+            byte[] chunk1Data = TerrainGenerator.GenerateChunk(new System.Numerics.Vector3(0, 0, 1));
+            int tex1 = UploadVoxelChunk(chunk1Data, chunkSize);
+
+            byte[] chunk2Data = TerrainGenerator.GenerateChunk(new System.Numerics.Vector3(1, 0, 0));
+            int tex2 = UploadVoxelChunk(chunk2Data, chunkSize);
+
+            byte[] chunk3Data = TerrainGenerator.GenerateChunk(new System.Numerics.Vector3(1, 0, 1));
+            int tex3 = UploadVoxelChunk(chunk3Data, chunkSize);
+
+            List<Chunk> chunks = new List<Chunk>()
+            {
+                new Chunk { coords = new Vector3i(0,0,0), textureId = tex0, voxelData = chunk0Data, size = chunkSize },
+                new Chunk { coords = new Vector3i(0,0,1), textureId = tex1, voxelData = chunk1Data, size = chunkSize },
+                new Chunk { coords = new Vector3i(1,0,0), textureId = tex2, voxelData = chunk2Data, size = chunkSize },
+                new Chunk { coords = new Vector3i(1,0,1), textureId = tex3, voxelData = chunk3Data, size = chunkSize },
+            };
+
+
+            // Build shader program first
+            program = BuildShader();
+            GL.UseProgram(program);
+
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture3D, chunks[0].textureId);
+            GL.Uniform1(GL.GetUniformLocation(program, "uVoxelTex[0]"), 0);
+
+            GL.ActiveTexture(TextureUnit.Texture1);
+            GL.BindTexture(TextureTarget.Texture3D, chunks[1].textureId);
+            GL.Uniform1(GL.GetUniformLocation(program, "uVoxelTex[1]"), 1);
+
+            GL.ActiveTexture(TextureUnit.Texture2);
+            GL.BindTexture(TextureTarget.Texture3D, chunks[2].textureId);
+            GL.Uniform1(GL.GetUniformLocation(program, "uVoxelTex[2]"), 2);
+
+            GL.ActiveTexture(TextureUnit.Texture3);
+            GL.BindTexture(TextureTarget.Texture3D, chunks[3].textureId);
+            GL.Uniform1(GL.GetUniformLocation(program, "uVoxelTex[4]"), 3);
 
             int locDim = GL.GetUniformLocation(program, "uVoxelDim");
             GL.Uniform3(locDim, chunkSize, chunkSize, chunkSize);
