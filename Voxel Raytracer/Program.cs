@@ -1,15 +1,13 @@
 ﻿using OpenTK.Graphics.OpenGL;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.Desktop;
-using OpenTK.Windowing.Common;
 using OpenTK.Input;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Globalization;
+using OpenTK.Mathematics;
+using OpenTK.Windowing.Common;
+using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
-using System.Diagnostics.Metrics;
+using System;
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Drawing.Printing;
 
 namespace Voxel_Raytracer
 {
@@ -38,16 +36,27 @@ namespace Voxel_Raytracer
     public class Renderer : GameWindow
     {
 
-        static int width = 960;
-        static int height = 540;
+        private static Config config => Config.Instance;
+
+        static int width => config.width;
+        static int height => config.height;
+        static int worldSize => config.worldSize;
+
+        static int chunkSize => config.chunkSize;
+
+        static double generationTime = 0;
+
+        private Chunk[] _chunks;
+
+        private GdiTextRenderer _textRenderer;
 
 
         float yaw = 0.0f; // y
         float pitch = 0.0f; // x
 
-        Vector3 camPos = new Vector3(0f, 0f, -3f);
-        float mouseSensitivity = 0.0015f;
-        float moveSpeed = 30f;
+        Vector3 camPos = new Vector3(0f, 80f, -3f);
+        float mouseSensitivity => config.mouseSensitivity;
+        float moveSpeed => config.moveSpeed;
 
         Vector3 cameraForward => new Vector3(
             MathF.Cos(pitch) * MathF.Sin(yaw),
@@ -89,7 +98,6 @@ namespace Voxel_Raytracer
 
             return shader;
         }
-
         private int BuildShader()
         {
             
@@ -157,49 +165,70 @@ namespace Voxel_Raytracer
             base.OnLoad();
             this.CursorState = CursorState.Grabbed;
 
+            _textRenderer = new GdiTextRenderer(width, height, "Monocraft", 20f);
+
             var TerrainGenerator = new Terrain();
-            int chunkSize = TerrainGenerator.chunkSize;
 
-            byte[] chunk0Data = TerrainGenerator.GenerateChunk(new System.Numerics.Vector3(0, 0, 0));
-            int tex0 = UploadVoxelChunk(chunk0Data, chunkSize);
+            var watch = new Stopwatch();
+            watch.Start();
 
-            byte[] chunk1Data = TerrainGenerator.GenerateChunk(new System.Numerics.Vector3(0, 0, 1));
-            int tex1 = UploadVoxelChunk(chunk1Data, chunkSize);
+            ConcurrentBag<(Vector3i coords, byte[] data)> generatedChunks = new ConcurrentBag<(Vector3i, byte[])>();
 
-            byte[] chunk2Data = TerrainGenerator.GenerateChunk(new System.Numerics.Vector3(1, 0, 0));
-            int tex2 = UploadVoxelChunk(chunk2Data, chunkSize);
-
-            byte[] chunk3Data = TerrainGenerator.GenerateChunk(new System.Numerics.Vector3(1, 0, 1));
-            int tex3 = UploadVoxelChunk(chunk3Data, chunkSize);
-
-            List<Chunk> chunks = new List<Chunk>()
+            ParallelOptions options = new ParallelOptions
             {
-                new Chunk { coords = new Vector3i(0,0,0), textureId = tex0, voxelData = chunk0Data, size = chunkSize },
-                new Chunk { coords = new Vector3i(0,0,1), textureId = tex1, voxelData = chunk1Data, size = chunkSize },
-                new Chunk { coords = new Vector3i(1,0,0), textureId = tex2, voxelData = chunk2Data, size = chunkSize },
-                new Chunk { coords = new Vector3i(1,0,1), textureId = tex3, voxelData = chunk3Data, size = chunkSize },
+                MaxDegreeOfParallelism = Environment.ProcessorCount // or any number you want
             };
+
+            //Console.WriteLine($"{Environment.ProcessorCount} processors");
+
+            int worldHeightChunks = config.worldHeightChunks; // define in Config
+            Chunk[] chunks = new Chunk[worldSize * worldHeightChunks * worldSize];
+
+            Parallel.For(0, worldSize * worldHeightChunks * worldSize, i =>
+            {
+                int x = i / (worldSize * worldHeightChunks);
+                int z = (i / worldHeightChunks) % worldSize;
+                int y = i % worldHeightChunks;
+
+                byte[] chunkData = TerrainGenerator.GenerateChunk(new System.Numerics.Vector3(x, y, z));
+                chunks[i] = new Chunk
+                {
+                    coords = new Vector3i(x, y, z),
+                    voxelData = chunkData,
+                    size = chunkSize
+                };
+            });
+
+
+            // Main thread: upload textures
+            for (int i_ = 0; i_ < chunks.Length; i_++)
+            {
+                chunks[i_].textureId = UploadVoxelChunk(chunks[i_].voxelData, chunkSize);
+            }
+
+            // If you need a List<Chunk> afterward
+            List<Chunk> chunkList = chunks.ToList();
 
 
             // Build shader program first
             program = BuildShader();
             GL.UseProgram(program);
 
-            GL.ActiveTexture(TextureUnit.Texture0);
-            GL.BindTexture(TextureTarget.Texture3D, chunks[0].textureId);
-            GL.Uniform1(GL.GetUniformLocation(program, "uVoxelTex[0]"), 0);
+            int i = 0;
+            foreach (var item in chunks)
+            {
+                GL.ActiveTexture(TextureUnit.Texture0 + i);
+                GL.BindTexture(TextureTarget.Texture3D, item.textureId);
+                GL.Uniform1(GL.GetUniformLocation(program, $"uVoxelTex[{i}]"), i);
 
-            GL.ActiveTexture(TextureUnit.Texture1);
-            GL.BindTexture(TextureTarget.Texture3D, chunks[1].textureId);
-            GL.Uniform1(GL.GetUniformLocation(program, "uVoxelTex[1]"), 1);
+                i++;
+            }
 
-            GL.ActiveTexture(TextureUnit.Texture2);
-            GL.BindTexture(TextureTarget.Texture3D, chunks[2].textureId);
-            GL.Uniform1(GL.GetUniformLocation(program, "uVoxelTex[2]"), 2);
+            _chunks = chunks;
 
-            GL.ActiveTexture(TextureUnit.Texture3);
-            GL.BindTexture(TextureTarget.Texture3D, chunks[3].textureId);
-            GL.Uniform1(GL.GetUniformLocation(program, "uVoxelTex[4]"), 3);
+            watch.Stop();
+
+            generationTime = watch.ElapsedMilliseconds;
 
             int locDim = GL.GetUniformLocation(program, "uVoxelDim");
             GL.Uniform3(locDim, chunkSize, chunkSize, chunkSize);
@@ -245,19 +274,31 @@ namespace Voxel_Raytracer
             frameCount++;
             timeBuildup += args.Time;
 
+            string fpsString = $"{Math.Round(frameCount / (timeBuildup > 0 ? timeBuildup : 1))} fps";
             if (timeBuildup > 0.5)
             {
-                Console.Clear();
-                Console.WriteLine($"{Math.Round(frameCount / timeBuildup)} fps");
-
                 timeBuildup = 0;
                 frameCount = 0;
             }
+
+            GL.Disable(EnableCap.Blend);
+            GL.Disable(EnableCap.DepthTest);
 
             GL.Clear(ClearBufferMask.ColorBufferBit);
 
             GL.UseProgram(program);
             GL.BindVertexArray(vao);
+
+            if (_chunks != null)
+            {
+                for (int i = 0; i < _chunks.Length; i++)
+                {
+                    // Activate the corresponding Texture Unit
+                    GL.ActiveTexture(TextureUnit.Texture0 + i);
+                    // Bind the 3D texture handle
+                    GL.BindTexture(TextureTarget.Texture3D, _chunks[i].textureId);
+                }
+            }
 
             // send uniforms 
             int resLoc = GL.GetUniformLocation(program, "iResolution");
@@ -275,8 +316,52 @@ namespace Voxel_Raytracer
 
             GL.DrawArrays(PrimitiveType.Triangles, 0, 3);
 
+            float margin = 10f;
+            float lineSpacing = 30f; // Adjusted for font size 24
+
+            int voxelCount = (int)((_chunks != null ? _chunks.Length : 1) * Math.Pow(chunkSize, 3));
+
+            _textRenderer.RenderText(
+                $"fps: {fpsString} {args.Time * 1000:f1}ms",
+                margin,
+                margin,
+                1.0f, 1.0f, 1.0f // White color
+            );
+
+            _textRenderer.RenderText(
+                $"world: {voxelCount / 10e5:f1}m voxels {worldSize}x{worldSize} chunks",
+                margin,
+                margin + lineSpacing * 1,
+                1.0f, 1.0f, 1.0f // White color
+            );
+
+            _textRenderer.RenderText(
+                $"generated in: {generationTime / 1000:f2} seconds with an average of {(generationTime / 1000) / (_chunks != null ? _chunks.Length : 1):f2}s per chunk",
+                margin,
+                margin + lineSpacing * 2,
+                1.0f, 1.0f, 1.0f
+            );
+
+            _textRenderer.RenderText(
+                $"system: {width}x{height}, {Environment.ProcessorCount} processors, {(voxelCount * 4) / 1024 / 1024}MiB for voxels",
+                margin,
+                margin + lineSpacing * 3,
+                1.0f, 1.0f, 1.0f
+            );
+
+            _textRenderer.RenderText(
+                $"pos: {Math.Round(camPos.X, 2)}, {Math.Round(camPos.Y, 2)}, {Math.Round(camPos.Z, 2)}",
+                margin,
+                margin + lineSpacing * 5,
+                1.0f, 0.7f, 0.2f // Orange color
+            );
+
             SwapBuffers();
         }
-
+        protected override void OnUnload()
+        {
+            base.OnUnload();
+            _textRenderer?.Dispose();
+        }
     }
 }

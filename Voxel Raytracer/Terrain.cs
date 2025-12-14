@@ -8,17 +8,17 @@ using System.Text;
 
 namespace Voxel_Raytracer
 {
+
     internal class Terrain
     {
-        public int chunkSize = 128;
-        static int worldHeight = 128;
+        private Config config => Config.Instance;
 
+        public float resolution => config.resolution;
+        public double scale => config.scale;
+        public double squishFactor => config.squishFactor;
+        public double baseHeight => config.worldHeight * 0.2;
+        public int chunkSize => config.chunkSize;
 
-
-        public float resolution = 2.0f;
-        public double scale = 0.04;
-        public double squishFactor = 48.0; // defaulted 64
-        public double baseHeight = worldHeight * 0.5;
 
         Vector3 lightDir = Vector3.Normalize(new Vector3(1, -1.0f, 0f));
 
@@ -65,9 +65,6 @@ namespace Voxel_Raytracer
         public byte[] GenerateChunk(Vector3 chunkCoords)
         {
 
-            var watch = new Stopwatch();
-            watch.Start();
-
             // R, G, B, filled
             var result = new byte[chunkSize * chunkSize * chunkSize * 4];
             int arraySize = result.Length;
@@ -94,7 +91,7 @@ namespace Voxel_Raytracer
                         double sampleY = (worldY / resolution) * scale;
                         double sampleZ = (worldZ / resolution) * scale;
 
-                        double density = perlin.FBM(sampleX, sampleZ, sampleY);
+                        double density = perlin.FBM3D(sampleX, sampleZ, sampleY, 1);
 
 
                         double densityModifier = (baseHeight - worldY) / xzSquish;
@@ -141,9 +138,9 @@ namespace Voxel_Raytracer
                         {
                             // make base block grass
                             double lightDiff = 10 * rnd.NextDouble();
-                            result[baseIndex] = (byte)(80 + lightDiff); // R
-                            result[baseIndex + 1] = (byte)(180 + lightDiff); // G
-                            result[baseIndex + 2] = (byte)(70 + lightDiff); //
+                            result[baseIndex] = (byte)(142 + lightDiff); // R
+                            result[baseIndex + 1] = (byte)(167 + lightDiff); // G
+                            result[baseIndex + 2] = (byte)(47 + lightDiff); //
 
 
                         }
@@ -194,8 +191,63 @@ namespace Voxel_Raytracer
                         }
 
                     }
-            
-            
+
+            Random treeRand = new Random((int)(chunkCoords.X * 24957 + chunkCoords.Y * 135 + chunkCoords.Z * 13581)); // deterministic per chunk
+
+            for (int x = 2; x < chunkSize - 2; x++)
+                for (int z = 2; z < chunkSize - 2; z++)
+                {
+                    // find grass surface
+                    for (int y = chunkSize - 4; y >= 2; y--)
+                    {
+                        int base_id = 4 * (z + chunkSize * (y + chunkSize * x));
+
+                        if (result[base_id + 3] == 255 &&
+                            result[base_id + 1] > 150 && result[base_id + 2] < 150 &&
+                            treeRand.NextDouble() < 0.0015)      // aspen frequency
+                        {
+                            string[] content;
+
+                            if (y + chunkCoords.Y * chunkSize > 80)
+                                content = File.ReadAllLines("presets/alpine_fir.ply");
+                            else
+                                content = File.ReadAllLines("presets/birch.ply");
+
+
+                            bool end_of_header = false;
+
+                            foreach (var item in content)
+                            {
+                                if (!end_of_header)
+                                {
+                                    if (item == "end_header")
+                                        end_of_header = true;
+                                    continue;
+                                }
+
+                                string[] split = item.Split(' ');
+                                int _x = int.Parse(split[0]) + x;
+                                int _z = int.Parse(split[1]) + z;
+                                int _y = int.Parse(split[2]) + y;
+                                int _r = int.Parse(split[3]);
+                                int _g = int.Parse(split[4]);
+                                int _b = int.Parse(split[5]);
+
+                                // make sure its not out of bounds
+                                if (_x < 0 || _x >= chunkSize || _y < 0 || _y >= chunkSize || _z < 0 || _z >= chunkSize)
+                                    continue;
+
+
+                                int voxel_id = 4 * (_z + chunkSize * (_y + chunkSize * _x));
+                                result[voxel_id] = (byte)_r;
+                                result[voxel_id + 1] =(byte)_g;
+                                result[voxel_id + 2] = (byte)_b;
+                                result[voxel_id + 3] = (byte)255;
+                            }
+                        }
+                    }
+                }
+
             // lighting
             for (int x = 0; x < chunkSize; x++)
                 for (int y = 0; y < chunkSize; y++)
@@ -216,7 +268,7 @@ namespace Voxel_Raytracer
 
 
 
-            float[,,] shadowBuf = new float[chunkSize, chunkSize, chunkSize];
+            float[,,]? shadowBuf = new float[chunkSize, chunkSize, chunkSize];
 
             for (int x = 0; x < chunkSize; x++)
                 for (int y = 0; y < chunkSize; y++)
@@ -231,7 +283,7 @@ namespace Voxel_Raytracer
                     }
 
             // 2. Blur the shadow buffer (diffusion kernel)
-            float[,,] blurred = new float[chunkSize, chunkSize, chunkSize];
+            float[,,]? blurred = new float[chunkSize, chunkSize, chunkSize];
 
             int radius = 2; // 2–3 is enough for smoothing
 
@@ -280,11 +332,12 @@ namespace Voxel_Raytracer
                         result[baseIndex + 2] = (byte)(result[baseIndex + 2] * light);
                     }
 
-
-            watch.Stop();
-            var elapsedMs = watch.ElapsedMilliseconds;
-            Console.WriteLine($"{elapsedMs}ms");
+            shadowBuf = null;
+            blurred = null;
+            GC.Collect();
+            
             return result;
         }
+
     }
 }

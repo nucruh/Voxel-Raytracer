@@ -9,9 +9,9 @@ public class PerlinNoise
     double frequency = 1;
 
     double lacunarity = 2.1042;
-    double persistance = 0.65;
+    double persistance = 0.5;
 
-    int octaves = 2;
+    int octaves = 4;
 
     double precompMaxAmp = 0;
 
@@ -126,22 +126,92 @@ public class PerlinNoise
     }
 
 
-    public double FBM(double x, double y, double z)
+    public double FBM3D(double x, double y, double z, double heightModifier)
     {
-        double noise = 0;
-        double amp = amplitude;
-        double freq = frequency;
+        double result = 0;
 
-        for (int i = 0; i < octaves; i++)
+        double amplitude = this.amplitude;
+        double frequency = this.frequency;
+
+        double sharpness = 10; // Options.sharpness
+        double reverseSharp = 10;
+
+        // Terrain noise for blending
+        double terrainNoiseFreq = 0.001;
+        double terrainNoise = Noise(x * terrainNoiseFreq, y * terrainNoiseFreq, z * terrainNoiseFreq);
+        double blendFactor = terrainNoise;
+
+        // Erosion map
+        double erosionNoiseFreq = 0.175;
+        double erosion = Noise(x * erosionNoiseFreq, y * erosionNoiseFreq, z * erosionNoiseFreq);
+        erosion = Math.Clamp(erosion, 0, 1);
+
+        // Height modifier using linear spline with SmoothStep
+        double[,] splinePoints = new double[,] { { 0.0, 0 }, { 0.25, 7 }, { 0.5, 12 }, { 0.6, 30 }, { 1.0, 100 } };
+        double heightMod = splinePoints[splinePoints.GetLength(0) - 1, 1]; // default to last point
+
+        for (int i = 0; i < splinePoints.GetLength(0) - 1; i++)
         {
-            noise += Noise(x * freq, y * freq, z * freq) * amp;
+            double x0 = splinePoints[i, 0];
+            double y0 = splinePoints[i, 1];
+            double x1 = splinePoints[i + 1, 0];
+            double y1 = splinePoints[i + 1, 1];
 
+            if (erosion >= x0 && erosion <= x1)
+            {
+                double t = (erosion - x0) / (x1 - x0);
 
-            freq *= lacunarity;
-            amp *= persistance;
+                // SmoothStep interpolation
+                t = t * t * (3 - 2 * t);
+
+                heightMod = y0 + t * (y1 - y0);
+                break;
+            }
         }
 
-        return noise / precompMaxAmp;
+        heightModifier = heightMod;
+
+        // Adjust sharpness
+        sharpness *= heightMod / 200.0;
+        reverseSharp /= (heightMod * 200.0);
+
+        // Loop through octaves (matching Roblox logic)
+        int bracketIndex = 0;
+        for (int i = 0; i < splinePoints.GetLength(0) - 1; i++)
+        {
+            if (erosion >= splinePoints[i, 0])
+                bracketIndex = i;
+        }
+
+        int octaveCount = 4 - (2 - bracketIndex); // Options.octaves - (2 - bracket_index)
+        for (int i = 0; i < octaveCount; i++)
+        {
+            // 3D noise using full x, y, z
+            double noiseValue = Noise(x * frequency, y * frequency, z * frequency);
+
+            // terrainFunction: plain*(1-blend) + hill*blend
+            double plain = noiseValue;
+            double hill = noiseValue * noiseValue;
+            double blended = plain * (1 - blendFactor) + hill * blendFactor;
+
+            // ridgeFunction
+            double ridge = 1.0 - Math.Abs(blended - 0.5) * 2.0;
+            double ridgeValue = Math.Pow(ridge, sharpness);
+
+            result += ridgeValue * amplitude;
+
+            amplitude *= persistance;
+            frequency *= lacunarity;
+        }
+
+        result /= octaveCount;      // Average over octaves
+        result += heightMod / 20;   // Add height modifier
+        result = Math.Clamp(result, 0, 255);
+
+        return result;
     }
+
+
+
 
 }
