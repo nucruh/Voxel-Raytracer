@@ -329,7 +329,7 @@ namespace Voxel_Raytracer
             );
 
             _textRenderer.RenderText(
-                $"world: {voxelCount / 10e5:f1}m voxels {worldSize}x{worldSize} chunks",
+                $"world: {voxelCount / 10e5:f1}m voxels {worldSize}x{worldSize}x{worldSize} chunks",
                 margin,
                 margin + lineSpacing * 1,
                 1.0f, 1.0f, 1.0f // White color

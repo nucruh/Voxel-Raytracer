@@ -20,6 +20,9 @@ namespace Voxel_Raytracer
         public int chunkSize => config.chunkSize;
 
 
+        static readonly string[] preset_birch = File.ReadAllLines("presets/birch.ply");
+        static readonly string[] preset_fir = File.ReadAllLines("presets/alpine_fir.ply");
+
         Vector3 lightDir = Vector3.Normalize(new Vector3(1, -1.0f, 0f));
 
         bool IsInShadow(int x, int y, int z, byte[] data)
@@ -74,6 +77,9 @@ namespace Voxel_Raytracer
 
             Vector3 offset = new Vector3(chunkCoords.X * chunkSize, chunkCoords.Y * chunkSize, chunkCoords.Z * chunkSize);
 
+            bool emptyChunk = true;
+
+            /*
             for (int x = 0; x < chunkSize; x++)
                 for (int z = 0; z < chunkSize; z++)
                 {
@@ -85,40 +91,72 @@ namespace Voxel_Raytracer
                         double worldY = y + offset.Y;
                         double worldZ = z + offset.Z;
 
-                        int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
 
                         double sampleX = (worldX / resolution) * scale;
                         double sampleY = (worldY / resolution) * scale;
                         double sampleZ = (worldZ / resolution) * scale;
 
                         double density = perlin.FBM3D(sampleX, sampleZ, sampleY, 1);
-
-
                         double densityModifier = (baseHeight - worldY) / xzSquish;
-
                         double finalDensity = density + densityModifier;
 
                         if (finalDensity > 0.9)
                         {
                             double lightDiff = 10 * rnd.NextDouble();
+                            int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
                             // solid material
                             result[baseIndex] = (byte)(200 + lightDiff); // R
                             result[baseIndex + 1] = (byte)(200 + lightDiff); // G
                             result[baseIndex + 2] = (byte)(200 + lightDiff); // B
                             result[baseIndex + 3] = 255; // filled (1.0f)
+                            emptyChunk = false;
                         }
-                        else
-                        {
-                            // air
-                            result[baseIndex] = 0;
-                            result[baseIndex + 1] = 0;
-                            result[baseIndex + 2] = 0;
-                            result[baseIndex + 3] = 0;
-                        }
+                        
+                        // no else needed since default is already 0
 
                     }
                 }
+            */
+            for (int x = 0; x < chunkSize; x++)
+                for (int z = 0; z < chunkSize; z++)
+                {
+                    double xzSquish = squishFactor * Math.Clamp(Math.Pow(perlin.Noise(x + offset.X, z + offset.Z, 1) + 1, 2), 0.5, 1.5);
+                    double worldX = x + offset.X;
+                    double worldZ = z + offset.Z;
 
+
+                    double sampleX = (worldX / resolution) * scale;
+                    double sampleZ = (worldZ / resolution) * scale;
+
+                    int height = (int) Math.Round(perlin.FBM3D(sampleX, sampleZ, (1 / resolution) * scale, 1) * 52);
+                    height -= (int)offset.Y;
+                    height = Math.Max(height, 0);
+                    int y = 0;
+
+                    while (y < height)
+                    {
+                        y++;
+                        if (y >= chunkSize) break;
+                        double lightDiff = 10 * rnd.NextDouble();
+                        int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
+                        // solid material
+                        result[baseIndex] = (byte)(200 + lightDiff); // R
+                        result[baseIndex + 1] = (byte)(200 + lightDiff); // G
+                        result[baseIndex + 2] = (byte)(200 + lightDiff); // B
+                        result[baseIndex + 3] = 255; // filled (1.0f)
+                        emptyChunk = false;
+                    }
+                    
+                }
+
+
+                    if (emptyChunk)
+            {
+                result[0] = 255;
+                result[3] = 0;
+
+                return result;
+            }
 
             for (int x = 0; x < chunkSize; x++)
                 for (int y = 0; y < chunkSize; y++)
@@ -204,14 +242,14 @@ namespace Voxel_Raytracer
 
                         if (result[base_id + 3] == 255 &&
                             result[base_id + 1] > 150 && result[base_id + 2] < 150 &&
-                            treeRand.NextDouble() < 0.0015)      // aspen frequency
+                            treeRand.NextDouble() < 0.0015)      // tree frequency
                         {
                             string[] content;
 
                             if (y + chunkCoords.Y * chunkSize > 80)
-                                content = File.ReadAllLines("presets/alpine_fir.ply");
+                                content = preset_fir;
                             else
-                                content = File.ReadAllLines("presets/birch.ply");
+                                content = preset_birch;
 
 
                             bool end_of_header = false;
@@ -248,23 +286,7 @@ namespace Voxel_Raytracer
                     }
                 }
 
-            // lighting
-            for (int x = 0; x < chunkSize; x++)
-                for (int y = 0; y < chunkSize; y++)
-                    for (int z = 0; z < chunkSize; z++)
-                    {
-                        int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
-                        if (result[baseIndex + 3] == 0)
-                            continue;
 
-                        bool shadow = IsInShadow(x, y, z, result);
-
-                        float shade = shadow ? 0.7f : 1.0f; // darken if shadow
-
-                        result[baseIndex] = (byte)(result[baseIndex] * shade);
-                        result[baseIndex + 1] = (byte)(result[baseIndex + 1] * shade);
-                        result[baseIndex + 2] = (byte)(result[baseIndex + 2] * shade);
-                    }
 
 
 
@@ -312,6 +334,7 @@ namespace Voxel_Raytracer
 
                         blurred[x, y, z] = sum / count; // average = local light amount
                     }
+
 
             // 3. Apply smoothed shadow factor to block colors
             for (int x = 0; x < chunkSize; x++)
