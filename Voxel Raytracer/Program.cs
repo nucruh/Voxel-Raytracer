@@ -46,6 +46,10 @@ namespace Voxel_Raytracer
 
         static double generationTime = 0;
 
+        int blockTextureArray;
+        const int BLOCK_TEX_SIZE = 32;
+        const int BLOCK_TEX_LAYERS = 256;
+
         private Chunk[] _chunks;
 
         private GdiTextRenderer _textRenderer;
@@ -166,80 +170,154 @@ namespace Voxel_Raytracer
             return tex;
         }
 
+        byte[] LoadBlockTexture(int id)
+        {
+            string path = $"textures/{id}.png";
+
+            if (!File.Exists(path))
+            {
+                Console.WriteLine(id);
+                    path = "textures/1.png"; // dirt texture as default if nto found
+            }
+            using var bmp = new System.Drawing.Bitmap(path);
+            var data = new byte[BLOCK_TEX_SIZE * BLOCK_TEX_SIZE * 4];
+
+            int i = 0;
+            for (int y = 0; y < BLOCK_TEX_SIZE; y++)
+            {
+                for (int x = 0; x < BLOCK_TEX_SIZE; x++)
+                {
+                    var c = bmp.GetPixel(x, y);
+                    data[i++] = c.R;
+                    data[i++] = c.G;
+                    data[i++] = c.B;
+                    data[i++] = c.A;
+                }
+            }
+
+            return data;
+        }
+
         protected override void OnLoad()
         {
             base.OnLoad();
-            this.CursorState = CursorState.Grabbed;
+            CursorState = CursorState.Grabbed;
 
             _textRenderer = new GdiTextRenderer(width, height, "Monocraft", 20f);
 
-            var TerrainGenerator = new Terrain();
+            var terrain = new Terrain();
+            var watch = Stopwatch.StartNew();
 
-            var watch = new Stopwatch();
-            watch.Start();
-
-            ConcurrentBag<(Vector3i coords, byte[] data)> generatedChunks = new ConcurrentBag<(Vector3i, byte[])>();
-
-            ParallelOptions options = new ParallelOptions
-            {
-                MaxDegreeOfParallelism = Environment.ProcessorCount // or any number you want
-            };
-
-            //Console.WriteLine($"{Environment.ProcessorCount} processors");
-
-            int worldHeightChunks = config.worldHeightChunks; // define in Config
+            int worldHeightChunks = config.worldHeightChunks;
             Chunk[] chunks = new Chunk[worldSize * worldHeightChunks * worldSize];
 
-            Parallel.For(0, worldSize * worldHeightChunks * worldSize, i =>
+            Parallel.For(0, chunks.Length, idx =>
             {
-                int x = i / (worldSize * worldHeightChunks);
-                int z = (i / worldHeightChunks) % worldSize;
-                int y = i % worldHeightChunks;
+                int x = idx / (worldSize * worldHeightChunks);
+                int z = (idx / worldHeightChunks) % worldSize;
+                int y = idx % worldHeightChunks;
 
-                byte[] chunkData = TerrainGenerator.GenerateChunk(new System.Numerics.Vector3(x, y, z));
-                chunks[i] = new Chunk
+                chunks[idx] = new Chunk
                 {
                     coords = new Vector3i(x, y, z),
-                    voxelData = chunkData,
+                    voxelData = terrain.GenerateChunk(new System.Numerics.Vector3(x, y, z)),
                     size = chunkSize
                 };
             });
 
-
-            // Main thread: upload textures
-            for (int i_ = 0; i_ < chunks.Length; i_++)
-            {
-                chunks[i_].textureId = UploadVoxelChunk(chunks[i_].voxelData, chunkSize);
-            }
-
-            // If you need a List<Chunk> afterward
-            List<Chunk> chunkList = chunks.ToList();
-
-
-            // Build shader program first
-            program = BuildShader();
-            GL.UseProgram(program);
-
-            int i = 0;
-            foreach (var item in chunks)
-            {
-                GL.ActiveTexture(TextureUnit.Texture0 + i);
-                GL.BindTexture(TextureTarget.Texture3D, item.textureId);
-                GL.Uniform1(GL.GetUniformLocation(program, $"uVoxelTex[{i}]"), i);
-
-                i++;
-            }
+            // Upload voxel chunks
+            for (int c = 0; c < chunks.Length; c++)
+                chunks[c].textureId = UploadVoxelChunk(chunks[c].voxelData, chunkSize);
 
             _chunks = chunks;
 
             watch.Stop();
-
             generationTime = watch.ElapsedMilliseconds;
 
-            int locDim = GL.GetUniformLocation(program, "uVoxelDim");
-            GL.Uniform3(locDim, chunkSize, chunkSize, chunkSize);
+            // --------------------
+            // Build shader
+            // --------------------
+            program = BuildShader();
+            GL.UseProgram(program);
+
+            // ============================================================
+            // 1️⃣ BLOCK TEXTURE ARRAY → UNIT 0
+            // ============================================================
+            blockTextureArray = GL.GenTexture();
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2DArray, blockTextureArray);
+
+            GL.TexImage3D(
+                TextureTarget.Texture2DArray,
+                0,
+                PixelInternalFormat.Rgba8,
+                BLOCK_TEX_SIZE,
+                BLOCK_TEX_SIZE,
+                BLOCK_TEX_LAYERS,
+                0,
+                PixelFormat.Rgba,
+                PixelType.UnsignedByte,
+                IntPtr.Zero
+            );
+
+            for (int i = 0; i < BLOCK_TEX_LAYERS; i++)
+            {
+                byte[] pixels = LoadBlockTexture(i);
+
+                GL.TexSubImage3D(
+                    TextureTarget.Texture2DArray,
+                    0,
+                    0, 0, i,
+                    BLOCK_TEX_SIZE,
+                    BLOCK_TEX_SIZE,
+                    1,
+                    PixelFormat.Rgba,
+                    PixelType.UnsignedByte,
+                    pixels
+                );
+            }
+
+            // Enable mipmaps
+            GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.NearestMipmapNearest);
+            GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+
+            // Wrap mode stays the same
+            GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+
+            // Generate mipmaps for the texture array
+            GL.GenerateMipmap(GenerateMipmapTarget.Texture2DArray);
+
+            GL.Uniform1(
+                GL.GetUniformLocation(program, "uBlockTextures"),
+                0
+            );
+
+            // ============================================================
+            // 2️⃣ VOXEL CHUNKS → UNITS [1..N]
+            // ============================================================
+            for (int i = 0; i < chunks.Length; i++)
+            {
+                int texUnit = 1 + i;
+
+                GL.ActiveTexture(TextureUnit.Texture0 + texUnit);
+                GL.BindTexture(TextureTarget.Texture3D, chunks[i].textureId);
+
+                GL.Uniform1(
+                    GL.GetUniformLocation(program, $"uVoxelTex[{i}]"),
+                    texUnit
+                );
+            }
+
+            // Other uniforms
+            GL.Uniform3(
+                GL.GetUniformLocation(program, "uVoxelDim"),
+                chunkSize, chunkSize, chunkSize
+            );
 
             vao = FullscreenTriangle();
+
+            Console.WriteLine("loaded");
         }
 
 

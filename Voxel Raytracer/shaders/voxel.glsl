@@ -12,6 +12,8 @@ uniform vec3 uCamUp;
 uniform usampler3D uVoxelTex[64];
 uniform ivec3 uVoxelDim;
 
+uniform sampler2DArray uBlockTextures;
+
 const int CHUNK_SIZE = 128;
 const int CHUNK_PWR  = 7;
 const int CHUNK_MASK = CHUNK_SIZE - 1;
@@ -217,12 +219,38 @@ void main() {
                                    mapPos.y&CHUNK_MASK,
                                    mapPos.x&CHUNK_MASK),0).r;
 
-        if(id!=254u) {
+        if(id != 254u)
+        {
             hit = true;
             hitDist = t;
-            hitCol = blockColor(id) + (hash31(mapPos) - 0.5) * 0.05;
+
+            // --- compute hit position ---
+            vec3 hitPos = uCamPos + rd * hitDist;
+            vec3 local = fract(hitPos); // [0..1] inside voxel
+
+            // --- face-based UVs ---
+            vec2 texUV;
+            if(mask == 0)      texUV = local.zy;
+            else if(mask == 1) texUV = local.xz;
+            else               texUV = local.xy;
+
+            // --- compute mip level based on screen-space derivatives ---
+            vec2 texSize = vec2(textureSize(uBlockTextures, 0).xy);
+            vec2 dx = dFdx(texUV * texSize);
+            vec2 dy = dFdy(texUV * texSize);
+            float mipLevel = 0.5 * log2(max(dot(dx, dx), dot(dy, dy)));
+            mipLevel = max(mipLevel, 0.0);
+
+            // --- sample texture array using mipmaps ---
+            vec3 texCol = textureLod(uBlockTextures, vec3(texUV, float(id)), mipLevel).rgb;
+
+            // --- subtle per-voxel variation (optional) ---
+            texCol *= 1.0 + (hash31(mapPos) - 0.5) * 0.05;
+
+            hitCol = texCol;
             break;
         }
+
 
         if(sideDist.x<sideDist.y){
             if(sideDist.x<sideDist.z){ t=sideDist.x; sideDist.x+=deltaDist.x; mapPos.x+=step.x; mask=0; }
