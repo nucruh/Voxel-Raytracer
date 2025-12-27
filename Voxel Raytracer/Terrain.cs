@@ -58,7 +58,7 @@ namespace Voxel_Raytracer
                     ix >= chunkSize || iy >= chunkSize || iz >= chunkSize)
                     return false; // ray left the chunk
 
-                int idx = 4 * (iz + chunkSize * (iy + chunkSize * ix));
+                int idx = (iz + chunkSize * (iy + chunkSize * ix));
                 if (data[idx + 3] == 255)
                     return true; // hit solid voxel
             }
@@ -69,7 +69,8 @@ namespace Voxel_Raytracer
         {
 
             // R, G, B, filled
-            var result = new byte[chunkSize * chunkSize * chunkSize * 4];
+            var result = new byte[chunkSize * chunkSize * chunkSize];
+            Array.Fill(result, (byte)254);
             int arraySize = result.Length;
             var perlin = new PerlinNoise(seed: 1234);
 
@@ -103,7 +104,7 @@ namespace Voxel_Raytracer
                         if (finalDensity > 0.9)
                         {
                             double lightDiff = 10 * rnd.NextDouble();
-                            int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
+                            int baseIndex = (z + chunkSize * (y + chunkSize * x));
                             // solid material
                             result[baseIndex] = (byte)(200 + lightDiff); // R
                             result[baseIndex + 1] = (byte)(200 + lightDiff); // G
@@ -135,25 +136,22 @@ namespace Voxel_Raytracer
 
                     while (y < height)
                     {
-                        y++;
+
                         if (y >= chunkSize) break;
-                        double lightDiff = 10 * rnd.NextDouble();
-                        int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
-                        // solid material
-                        result[baseIndex] = (byte)(200 + lightDiff); // R
-                        result[baseIndex + 1] = (byte)(200 + lightDiff); // G
-                        result[baseIndex + 2] = (byte)(200 + lightDiff); // B
-                        result[baseIndex + 3] = 255; // filled (1.0f)
+                        //double lightDiff = 10 * rnd.NextDouble();
+                        int baseIndex = (z + chunkSize * (y + chunkSize * x));
+                        // solid materiala
+                        result[baseIndex] = 0;
                         emptyChunk = false;
+                        y++;
                     }
                     
                 }
 
 
-                    if (emptyChunk)
+            if (emptyChunk)
             {
                 result[0] = 255;
-                result[3] = 0;
 
                 return result;
             }
@@ -162,23 +160,22 @@ namespace Voxel_Raytracer
                 for (int y = 0; y < chunkSize; y++)
                     for (int z = 0; z < chunkSize; z++)
                     {
-                        int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
+                        int baseIndex = (z + chunkSize * (y + chunkSize * x));
 
-                        if (result[baseIndex + 3] == 0) continue;
+                        if (result[baseIndex] == 254) continue;
 
                         // check above
-                        int above1 = 4 * (z + chunkSize * ((y + 1) + chunkSize * x));
-                        int above2 = 4 * (z + chunkSize * ((y + 2) + chunkSize * x));
+                        int above1 = (z + chunkSize * ((y + 1) + chunkSize * x));
+                        int above2 = (z + chunkSize * ((y + 2) + chunkSize * x));
 
-                        if (above1+3 > arraySize || above2+3 > arraySize) continue;
+                        if (above1 >= arraySize || above2 >= arraySize) continue;
 
-                        if (result[above1 + 3] == 0 && result[above2 + 3] == 0)
+
+                        // could maybe omit since not using 3d perlin anymore????? !
+                        if (result[above1] == 254 && result[above2] == 254)
                         {
                             // make base block grass
-                            double lightDiff = 10 * rnd.NextDouble();
-                            result[baseIndex] = (byte)(142 + lightDiff); // R
-                            result[baseIndex + 1] = (byte)(167 + lightDiff); // G
-                            result[baseIndex + 2] = (byte)(47 + lightDiff); //
+                            result[baseIndex] = 2;
 
 
                         }
@@ -187,46 +184,19 @@ namespace Voxel_Raytracer
 
                             // make bottom ones dirt if they do exist
 
-                        int below1 = 4 * (z + chunkSize * ((y - 1) + chunkSize * x));
-                        int below2 = 4 * (z + chunkSize * ((y - 2) + chunkSize * x));
-                        int below3 = 4 * (z + chunkSize * ((y - 3) + chunkSize * x));
+                        int below1 = (z + chunkSize * ((y - 1) + chunkSize * x));
+                        int below2 = (z + chunkSize * ((y - 2) + chunkSize * x));
+                        int below3 = (z + chunkSize * ((y - 3) + chunkSize * x));
 
-                        if (below1 >= 0)
-                        {
-                            if (result[below1 + 3] == 255)
-                            {
-                                // make dirt
-                                double lightDiff = 10 * rnd.NextDouble();
-                                result[below1] = (byte)(124 + lightDiff); // R
-                                result[below1 + 1] = (byte)(94 + lightDiff); // G
-                                result[below1 + 2] = (byte)(74 + lightDiff); // B
-                            }
-                        }
+                        // make bottom 3 dirt if possible (stone below)
+                        if (y > 0 && result[below1] == 0)
+                            result[below1] = 1;
 
+                        if (y > 1 && result[below2] == 0)
+                            result[below2] = 1;
 
-                        if (below2 >= 0)
-                        {
-                            if (result[below2 + 3] == 255)
-                            {
-                                // make dirt
-                                double lightDiff = 10 * rnd.NextDouble();
-                                result[below2] = (byte)(124 + lightDiff); // R
-                                result[below2 + 1] = (byte)(94 + lightDiff); // G
-                                result[below2 + 2] = (byte)(74 + lightDiff); // B
-                            }
-                        }
-
-                        if (below3 >= 0)
-                        {
-                            if (result[below3 + 3] == 255)
-                            {
-                                // make dirt
-                                double lightDiff = 10 * rnd.NextDouble();
-                                result[below3] = (byte)(124 + lightDiff); // R
-                                result[below3 + 1] = (byte)(94 + lightDiff); // G
-                                result[below3 + 2] = (byte)(74 + lightDiff); // B
-                            }
-                        }
+                        if (y > 2 && result[below3] == 0)
+                            result[below3] = 1;
 
                     }
 
@@ -238,11 +208,9 @@ namespace Voxel_Raytracer
                     // find grass surface
                     for (int y = chunkSize - 4; y >= 2; y--)
                     {
-                        int base_id = 4 * (z + chunkSize * (y + chunkSize * x));
+                        int base_id = (z + chunkSize * (y + chunkSize * x));
 
-                        if (result[base_id + 3] == 255 &&
-                            result[base_id + 1] > 150 && result[base_id + 2] < 150 &&
-                            treeRand.NextDouble() < 0.0015)      // tree frequency
+                        if (result[base_id] == 2 && treeRand.NextDouble() < 0.0015)      // tree frequency
                         {
                             string[] content;
 
@@ -276,88 +244,24 @@ namespace Voxel_Raytracer
                                     continue;
 
 
-                                int voxel_id = 4 * (_z + chunkSize * (_y + chunkSize * _x));
-                                result[voxel_id] = (byte)_r;
-                                result[voxel_id + 1] =(byte)_g;
-                                result[voxel_id + 2] = (byte)_b;
-                                result[voxel_id + 3] = (byte)255;
+                                int voxel_id = (_z + chunkSize * (_y + chunkSize * _x));
+
+                                byte blockId;
+                                switch (_r, _g)
+                                {
+                                    case (141, 180): blockId = 5; break; // birch_leaves
+                                    case (221, 221): blockId = 3; break; // birch_log
+
+                                    case (125, 150): blockId = 6; break; // pine_leaves
+                                    case (102, 51): blockId = 4; break; // pine_log
+                                    default: blockId = 0; break;
+                                }
+
+                                result[voxel_id] = blockId;
                             }
                         }
                     }
                 }
-
-
-
-
-
-            float[,,]? shadowBuf = new float[chunkSize, chunkSize, chunkSize];
-
-            for (int x = 0; x < chunkSize; x++)
-                for (int y = 0; y < chunkSize; y++)
-                    for (int z = 0; z < chunkSize; z++)
-                    {
-                        int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
-                        if (result[baseIndex + 3] == 0)
-                            continue;
-
-                        bool shadow = IsInShadow(x, y, z, result);
-                        shadowBuf[x, y, z] = shadow ? 0f : 1f;
-                    }
-
-            // 2. Blur the shadow buffer (diffusion kernel)
-            float[,,]? blurred = new float[chunkSize, chunkSize, chunkSize];
-
-            int radius = 2; // 2–3 is enough for smoothing
-
-            for (int x = 0; x < chunkSize; x++)
-                for (int y = 0; y < chunkSize; y++)
-                    for (int z = 0; z < chunkSize; z++)
-                    {
-                        float sum = 0f;
-                        int count = 0;
-
-                        for (int dx = -radius; dx <= radius; dx++)
-                            for (int dy = -radius; dy <= radius; dy++)
-                                for (int dz = -radius; dz <= radius; dz++)
-                                {
-                                    int nx = x + dx;
-                                    int ny = y + dy;
-                                    int nz = z + dz;
-
-                                    if (nx < 0 || ny < 0 || nz < 0 ||
-                                        nx >= chunkSize || ny >= chunkSize || nz >= chunkSize)
-                                        continue;
-
-                                    sum += shadowBuf[nx, ny, nz];
-                                    count++;
-                                }
-
-                        blurred[x, y, z] = sum / count; // average = local light amount
-                    }
-
-
-            // 3. Apply smoothed shadow factor to block colors
-            for (int x = 0; x < chunkSize; x++)
-                for (int y = 0; y < chunkSize; y++)
-                    for (int z = 0; z < chunkSize; z++)
-                    {
-                        int baseIndex = 4 * (z + chunkSize * (y + chunkSize * x));
-                        if (result[baseIndex + 3] == 0)
-                            continue;
-
-                        float light = 0.7f + blurred[x, y, z] * 1f;
-                        // 0.6 = full shadow
-                        // 1.0 = full light
-                        // softens in-between
-
-                        result[baseIndex] = (byte)(result[baseIndex] * light);
-                        result[baseIndex + 1] = (byte)(result[baseIndex + 1] * light);
-                        result[baseIndex + 2] = (byte)(result[baseIndex + 2] * light);
-                    }
-
-            shadowBuf = null;
-            blurred = null;
-            GC.Collect();
             
             return result;
         }

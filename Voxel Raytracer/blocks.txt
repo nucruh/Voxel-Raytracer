@@ -1,0 +1,14 @@
+0 - stone
+1 - dirt
+2 - grass
+
+
+3 - birch_log
+4 - pine_log
+
+5 - birch_leaves
+6 - pine_leaves
+
+
+254 - air
+255 - whole chunk is air

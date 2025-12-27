@@ -1,5 +1,4 @@
 ﻿#version 330 core
-
 out vec4 FragColor;
 
 uniform vec2 iResolution;
@@ -10,141 +9,260 @@ uniform vec3 uCamForward;
 uniform vec3 uCamRight;
 uniform vec3 uCamUp;
 
-uniform sampler3D uVoxelTex[64];
-uniform ivec3 uVoxelDim; // chunkSize, chunkSize, chunkSize
-
-const int WORLD_SIZE_X = int(pow(float(uVoxelTex.length), 1.0/3.0));  // worldSize
-const int WORLD_SIZE_Z = int(pow(float(uVoxelTex.length), 1.0/3.0));  // worldSize
-const int WORLD_SIZE_Y = int(pow(float(uVoxelTex.length), 1.0/3.0));  // worldHeightChunks
+uniform usampler3D uVoxelTex[64];
+uniform ivec3 uVoxelDim;
 
 const int CHUNK_SIZE = 128;
 const int CHUNK_PWR  = 7;
 const int CHUNK_MASK = CHUNK_SIZE - 1;
 
+const int WORLD_SIZE_X = 4;
+const int WORLD_SIZE_Y = 4;
+const int WORLD_SIZE_Z = 4;
+
 const int WORLD_VOX_X = WORLD_SIZE_X * CHUNK_SIZE;
 const int WORLD_VOX_Y = WORLD_SIZE_Y * CHUNK_SIZE;
 const int WORLD_VOX_Z = WORLD_SIZE_Z * CHUNK_SIZE;
 
-const int MAX_STEPS = (WORLD_SIZE_X + WORLD_SIZE_Y + WORLD_SIZE_Z) * CHUNK_SIZE;
+const int GODRAY_STEPS = 16;
+const float GODRAY_DENSITY = 0.025;
+const float GODRAY_DECAY = 0.99;
+const float GODRAY_INTENSITY = 1.2;
 
-void main()
+const int MAX_STEPS = 768;
+const vec3 SUN_DIR = normalize(vec3(1.0, -1.0, 0.5));
+const int SHADOW_STEPS = 48;
+const float SHADOW_BIAS = 0.01;
+
+// ---------- utilities ----------
+
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+float hash31(ivec3 p) {
+    uint x = uint(p.x);
+    uint y = uint(p.y);
+    uint z = uint(p.z);
+
+    uint h = x*374761393u + y*668265263u + z*2147483647u; // large primes
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    return float(h & 0x00FFFFFFu) / float(0x01000000u);
+}
+
+vec3 blockColor(uint id) {
+    if (id==0u) return vec3(200,200,200)/255.0;
+    if (id==1u) return vec3(124,94,74)/255.0;
+    if (id==2u) return vec3(142,167,47)/255.0;
+    if (id==3u) return vec3(238,238,238)/255.0;
+    if (id==4u) return vec3(102,51,0)/255.0;
+    if (id==5u) return vec3(141,180,105)/255.0;
+    if (id==6u) return vec3(125,150,49)/255.0;
+    return vec3(1,0,1);
+}
+
+// safe reciprocal to avoid INF / zero-step
+vec3 safeDeltaDist(vec3 rd) {
+    const float EPS = 1e-6;
+    return abs(vec3(
+        1.0 / (abs(rd.x) > EPS ? rd.x : (rd.x < 0.0 ? -EPS : EPS)),
+        1.0 / (abs(rd.y) > EPS ? rd.y : (rd.y < 0.0 ? -EPS : EPS)),
+        1.0 / (abs(rd.z) > EPS ? rd.z : (rd.z < 0.0 ? -EPS : EPS))
+    ));
+}
+
+float ComputeGodRaysFast(vec3 rayOrigin, vec3 rayDir, float maxDist)
 {
-    // Ray setup
-    vec2 uv = (gl_FragCoord.xy / iResolution) * 2.0 - 1.0;
-    uv.x *= iResolution.x / iResolution.y;
-    vec3 rd = normalize(uCamForward + uv.x * uCamRight + uv.y * uCamUp);
+    float stepSize = maxDist / float(GODRAY_STEPS);
+    float illumination = 0.0;
+    float transmittance = 1.0;
 
-    // DDA init
-    ivec3 mapPos = ivec3(floor(uCamPos));
-    vec3 deltaDist = abs(1.0 / rd);
-    ivec3 stepDir = ivec3(sign(rd));
-
-    vec3 sideDist;
-    sideDist.x = (rd.x < 0.0) ? (uCamPos.x - float(mapPos.x)) * deltaDist.x
-                              : (float(mapPos.x + 1) - uCamPos.x) * deltaDist.x;
-    sideDist.y = (rd.y < 0.0) ? (uCamPos.y - float(mapPos.y)) * deltaDist.y
-                              : (float(mapPos.y + 1) - uCamPos.y) * deltaDist.y;
-    sideDist.z = (rd.z < 0.0) ? (uCamPos.z - float(mapPos.z)) * deltaDist.z
-                              : (float(mapPos.z + 1) - uCamPos.z) * deltaDist.z;
-
-    bool hit = false;
-    vec3 hitColor = vec3(0.0);
-    int mask = 0;
-    int iter = 0;
-
-    for (int i = 0; i < MAX_STEPS; i++)
+    for(int i = 0; i < GODRAY_STEPS; i++)
     {
-        // ---- WORLD BOUNDS (CRITICAL) ----
-        if (mapPos.x < 0 || mapPos.y < 0 || mapPos.z < 0 ||
-            mapPos.x >= WORLD_VOX_X ||
-            mapPos.y >= WORLD_VOX_Y ||
-            mapPos.z >= WORLD_VOX_Z)
-        {
-            // outside world → skip sampling
+        float t = stepSize * float(i);
+        illumination += transmittance * GODRAY_DENSITY;
+        transmittance *= GODRAY_DECAY;
+    }
+
+    return illumination;
+}
+
+// ---------- FIXED chunk skip ----------
+int SkipEmptyChunk(
+    inout ivec3 pos,
+    inout vec3 sideDist,
+    vec3 deltaDist,
+    ivec3 step
+){
+    int lx = pos.x & CHUNK_MASK;
+    int ly = pos.y & CHUNK_MASK;
+    int lz = pos.z & CHUNK_MASK;
+
+    int nx = (step.x > 0) ? (CHUNK_SIZE - lx) : (lx + 1);
+    int ny = (step.y > 0) ? (CHUNK_SIZE - ly) : (ly + 1);
+    int nz = (step.z > 0) ? (CHUNK_SIZE - lz) : (lz + 1);
+
+    float tx = sideDist.x + float(nx - 1) * deltaDist.x;
+    float ty = sideDist.y + float(ny - 1) * deltaDist.y;
+    float tz = sideDist.z + float(nz - 1) * deltaDist.z;
+
+    if (tx <= ty && tx <= tz) {
+        pos.x += step.x * nx;
+        sideDist.x = tx + deltaDist.x;
+        return 0;
+    } else if (ty <= tz) {
+        pos.y += step.y * ny;
+        sideDist.y = ty + deltaDist.y;
+        return 1;
+    } else {
+        pos.z += step.z * nz;
+        sideDist.z = tz + deltaDist.z;
+        return 2;
+    }
+}
+
+// ---------- shadow trace (same logic) ----------
+bool TraceShadow(vec3 startPos) {
+    vec3 rd = -SUN_DIR;
+    vec3 posf = startPos + rd * SHADOW_BIAS;
+
+    ivec3 mapPos = ivec3(floor(posf));
+    vec3 deltaDist = safeDeltaDist(rd);
+    ivec3 step = ivec3(rd.x>0?1:-1, rd.y>0?1:-1, rd.z>0?1:-1);
+
+    vec3 sideDist = vec3(
+        ((rd.x<0)?(posf.x-float(mapPos.x)):(float(mapPos.x+1)-posf.x))*deltaDist.x,
+        ((rd.y<0)?(posf.y-float(mapPos.y)):(float(mapPos.y+1)-posf.y))*deltaDist.y,
+        ((rd.z<0)?(posf.z-float(mapPos.z)):(float(mapPos.z+1)-posf.z))*deltaDist.z
+    );
+
+    for(int i=0;i<SHADOW_STEPS;i++) {
+        if(any(lessThan(mapPos, ivec3(0))) ||
+           mapPos.x>=WORLD_VOX_X || mapPos.y>=WORLD_VOX_Y || mapPos.z>=WORLD_VOX_Z)
+            return false;
+
+        int cx = mapPos.x>>CHUNK_PWR;
+        int cy = mapPos.y>>CHUNK_PWR;
+        int cz = mapPos.z>>CHUNK_PWR;
+
+        int chunkIndex = cx*(WORLD_SIZE_Y*WORLD_SIZE_Z)+cz*WORLD_SIZE_Y+cy;
+        uint header = texelFetch(uVoxelTex[chunkIndex], ivec3(0,0,0),0).r;
+
+        if(header==255u) {
+            SkipEmptyChunk(mapPos, sideDist, deltaDist, step);
+            continue;
         }
-        else
-        {
-            // ---- CHUNK COORDS ----
-            int cx = mapPos.x >> CHUNK_PWR;
-            int cy = mapPos.y >> CHUNK_PWR;
-            int cz = mapPos.z >> CHUNK_PWR;
 
-            // ---- LOCAL VOXEL COORDS ----
-            int lx = mapPos.x & CHUNK_MASK;
-            int ly = mapPos.y & CHUNK_MASK;
-            int lz = mapPos.z & CHUNK_MASK;
+        uint id = texelFetch(uVoxelTex[chunkIndex],
+                             ivec3(mapPos.z&CHUNK_MASK,
+                                   mapPos.y&CHUNK_MASK,
+                                   mapPos.x&CHUNK_MASK),0).r;
+        if(id!=254u) return true;
 
-            // ---- MATCHES C# INDEX EXACTLY ----
-            int chunkIndex =
-                cx * (WORLD_SIZE_Y * WORLD_SIZE_Z) +
-                cz * (WORLD_SIZE_Y) +
-                cy;
+        if(sideDist.x<sideDist.y){
+            if(sideDist.x<sideDist.z){ sideDist.x+=deltaDist.x; mapPos.x+=step.x; }
+            else { sideDist.z+=deltaDist.z; mapPos.z+=step.z; }
+        } else {
+            if(sideDist.y<sideDist.z){ sideDist.y+=deltaDist.y; mapPos.y+=step.y; }
+            else { sideDist.z+=deltaDist.z; mapPos.z+=step.z; }
+        }
+    }
+    return false;
+}
 
-            vec3 uvw = (vec3(lz, ly, lx) + 0.5) / float(CHUNK_SIZE);
-            vec4 tex = texture(uVoxelTex[chunkIndex], uvw);
+// ---------- main ----------
+void main() {
+    vec2 uv = (gl_FragCoord.xy/iResolution)*2.0-1.0;
+    uv.x *= iResolution.x/iResolution.y;
 
-            if (tex.a > 0.5)
-            {
-                hit = true;
-                hitColor = tex.rgb;
-                iter = i;
-                break;
-            }
+    vec3 rd = normalize(uCamForward + uv.x*uCamRight + uv.y*uCamUp);
+
+    ivec3 mapPos = ivec3(floor(uCamPos));
+    vec3 deltaDist = safeDeltaDist(rd);
+    ivec3 step = ivec3(rd.x>0?1:-1, rd.y>0?1:-1, rd.z>0?1:-1);
+
+    vec3 sideDist = vec3(
+        ((rd.x<0)?(uCamPos.x-float(mapPos.x)):(float(mapPos.x+1)-uCamPos.x))*deltaDist.x,
+        ((rd.y<0)?(uCamPos.y-float(mapPos.y)):(float(mapPos.y+1)-uCamPos.y))*deltaDist.y,
+        ((rd.z<0)?(uCamPos.z-float(mapPos.z)):(float(mapPos.z+1)-uCamPos.z))*deltaDist.z
+    );
+
+    vec3 hitCol = vec3(0.0);
+    bool hit = false;
+    int mask = -1;
+    float t = 0.0;
+    float hitDist = 0.0;
+
+    for(int i=0;i<MAX_STEPS;i++) {
+        if(any(lessThan(mapPos, ivec3(0))) ||
+           mapPos.x>=WORLD_VOX_X || mapPos.y>=WORLD_VOX_Y || mapPos.z>=WORLD_VOX_Z)
+            break;
+
+        int cx = mapPos.x>>CHUNK_PWR;
+        int cy = mapPos.y>>CHUNK_PWR;
+        int cz = mapPos.z>>CHUNK_PWR;
+
+        int chunkIndex = cx*(WORLD_SIZE_Y*WORLD_SIZE_Z)+cz*WORLD_SIZE_Y+cy;
+        uint header = texelFetch(uVoxelTex[chunkIndex], ivec3(0,0,0),0).r;
+
+        if(header==255u) {
+            mask = SkipEmptyChunk(mapPos, sideDist, deltaDist, step);
+            continue;
         }
 
-        // ---- DDA STEP ----
-        if (sideDist.x < sideDist.y)
-        {
-            if (sideDist.x < sideDist.z)
-            {
-                sideDist.x += deltaDist.x;
-                mapPos.x += stepDir.x;
-                mask = 0;
-            }
-            else
-            {
-                sideDist.z += deltaDist.z;
-                mapPos.z += stepDir.z;
-                mask = 2;
-            }
+        uint id = texelFetch(uVoxelTex[chunkIndex],
+                             ivec3(mapPos.z&CHUNK_MASK,
+                                   mapPos.y&CHUNK_MASK,
+                                   mapPos.x&CHUNK_MASK),0).r;
+
+        if(id!=254u) {
+            hit = true;
+            hitDist = t;
+            hitCol = blockColor(id) + (hash31(mapPos) - 0.5) * 0.05;
+            break;
         }
-        else
-        {
-            if (sideDist.y < sideDist.z)
-            {
-                sideDist.y += deltaDist.y;
-                mapPos.y += stepDir.y;
-                mask = 1;
-            }
-            else
-            {
-                sideDist.z += deltaDist.z;
-                mapPos.z += stepDir.z;
-                mask = 2;
-            }
+
+        if(sideDist.x<sideDist.y){
+            if(sideDist.x<sideDist.z){ t=sideDist.x; sideDist.x+=deltaDist.x; mapPos.x+=step.x; mask=0; }
+            else { t=sideDist.z; sideDist.z+=deltaDist.z; mapPos.z+=step.z; mask=2; }
+        } else {
+            if(sideDist.y<sideDist.z){ t=sideDist.y; sideDist.y+=deltaDist.y; mapPos.y+=step.y; mask=1; }
+            else { t=sideDist.z; sideDist.z+=deltaDist.z; mapPos.z+=step.z; mask=2; }
         }
     }
 
-    // ---- SHADING ----
-    vec3 skyColor = mix(vec3(0.62, 0.79, 0.93),
-                        vec3(0.57, 0.74, 0.90),
-                        rd.y * 0.5 + 0.5);
-
+    vec3 skyColor = mix(vec3(0.72,0.89,1), vec3(0.67,0.84,1.0), rd.y*0.5+0.5);
     vec3 color = skyColor;
 
-    if (hit)
-    {
+
+    if(hit) {
         vec3 normal = vec3(0.0);
-        if (mask == 0) normal.x = -float(stepDir.x);
-        else if (mask == 1) normal.y = -float(stepDir.y);
-        else normal.z = -float(stepDir.z);
+        if(mask==0) normal.x = -float(step.x);
+        else if(mask==1) normal.y = -float(step.y);
+        else normal.z = -float(step.z);
 
-        float diff = max(dot(normal, normalize(vec3(-1.0, 1.0, 0.0))), 0.0);
-        float ambient = 0.8;
-
-        color = hitColor * (ambient + (1.0 - ambient) * diff);
-        color = mix(skyColor, color, 1.0 - float(iter) / float(MAX_STEPS));
+        vec3 hitPos = uCamPos + rd*hitDist;
+        float diff = max(dot(normal,-SUN_DIR),0.0);
+        float shadow = TraceShadow(hitPos) ? 0.25 : 1.0;
+        color = hitCol * (0.6 + diff*shadow);
+        color = mix(skyColor, color, 1.0 - hitDist/float(MAX_STEPS));
     }
 
-    FragColor = vec4(color, 1.0);
+    float maxRayDist = hit ? hitDist : float(MAX_STEPS);
+    // cheap volumetric godrays
+    float godrays = ComputeGodRaysFast(uCamPos, rd, maxRayDist);
+    // only visible when looking toward sun
+    float sunView = max(dot(rd, -SUN_DIR), 0.0); godrays *= pow(sunView, 3.0);
+    // depth fade so rays fade out for distant pixels
+    godrays *= smoothstep(0.0, 1.0, maxRayDist / 80.0);
+    vec3 sunColor = vec3(1.0, 0.95, 0.85);
+    color += sunColor * godrays * GODRAY_INTENSITY;
+    float grain = hash21(gl_FragCoord.xy);
+    color += (grain-0.5)*0.03;
+    color = mix(color, smoothstep(0.0,1.0,color),0.4);
+    color = pow(color, vec3(0.9));
+
+    FragColor = vec4(color,1.0);
 }

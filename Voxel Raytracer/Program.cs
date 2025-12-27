@@ -51,10 +51,10 @@ namespace Voxel_Raytracer
         private GdiTextRenderer _textRenderer;
 
 
-        float yaw = 0.0f; // y
+        float yaw = 45.0f; // y
         float pitch = 0.0f; // x
 
-        Vector3 camPos = new Vector3(0f, 80f, -3f);
+        Vector3 camPos = new Vector3(3f, 120f, 3f);
         float mouseSensitivity => config.mouseSensitivity;
         float moveSpeed => config.moveSpeed;
 
@@ -144,18 +144,24 @@ namespace Voxel_Raytracer
         int UploadVoxelChunk(byte[] data, int size)
         {
             int tex = GL.GenTexture();
-
             GL.BindTexture(TextureTarget.Texture3D, tex);
-            GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.Rgba8,
-                          size, size, size, 0,
-                          PixelFormat.Rgba, PixelType.UnsignedByte, data);
+
+            GL.TexImage3D(
+                TextureTarget.Texture3D,
+                0,
+                PixelInternalFormat.R8ui,     // 1 byte per voxel
+                size, size, size,
+                0,
+                PixelFormat.RedInteger,      // integer data
+                PixelType.UnsignedByte,
+                data
+            );
 
             GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
             GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
             GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
-
 
             return tex;
         }
@@ -289,6 +295,7 @@ namespace Voxel_Raytracer
             GL.UseProgram(program);
             GL.BindVertexArray(vao);
 
+            /*
             if (_chunks != null)
             {
                 for (int i = 0; i < _chunks.Length; i++)
@@ -299,6 +306,7 @@ namespace Voxel_Raytracer
                     GL.BindTexture(TextureTarget.Texture3D, _chunks[i].textureId);
                 }
             }
+            */
 
             // send uniforms 
             int resLoc = GL.GetUniformLocation(program, "iResolution");
@@ -321,6 +329,7 @@ namespace Voxel_Raytracer
 
             int voxelCount = (int)((_chunks != null ? _chunks.Length : 1) * Math.Pow(chunkSize, 3));
 
+
             _textRenderer.RenderText(
                 $"fps: {fpsString} {args.Time * 1000:f1}ms",
                 margin,
@@ -336,14 +345,14 @@ namespace Voxel_Raytracer
             );
 
             _textRenderer.RenderText(
-                $"generated in: {generationTime / 1000:f2} seconds with an average of {(generationTime / 1000) / (_chunks != null ? _chunks.Length : 1):f2}s per chunk",
+                $"generated in: {generationTime:f1}ms with an average of {(generationTime) / (_chunks != null ? _chunks.Length : 1):f2}ms per chunk",
                 margin,
                 margin + lineSpacing * 2,
                 1.0f, 1.0f, 1.0f
             );
 
             _textRenderer.RenderText(
-                $"system: {width}x{height}, {Environment.ProcessorCount} processors, {(voxelCount * 4) / 1024 / 1024}MiB for voxels",
+                $"system: {width}x{height}, {Environment.ProcessorCount} processors, {(voxelCount * 1) / 1024 / 1024}MiB for voxels",
                 margin,
                 margin + lineSpacing * 3,
                 1.0f, 1.0f, 1.0f
