@@ -78,7 +78,7 @@ namespace Voxel_Raytracer
             ClientSize = new Vector2i(width, height),
             Title = "Voxel Engine",
             APIVersion = new Version(3, 3),
-            Vsync = OpenTK.Windowing.Common.VSyncMode.On,
+            Vsync = OpenTK.Windowing.Common.VSyncMode.Off,
             NumberOfSamples = 4,
         };
 

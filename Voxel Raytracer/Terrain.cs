@@ -22,49 +22,6 @@ namespace Voxel_Raytracer
 
         static readonly string[] preset_birch = File.ReadAllLines("presets/birch.ply");
         static readonly string[] preset_fir = File.ReadAllLines("presets/alpine_fir.ply");
-
-        Vector3 lightDir = Vector3.Normalize(new Vector3(1, -1.0f, 0f));
-
-        bool IsInShadow(int x, int y, int z, byte[] data)
-        {
-            const int maxSteps = 128;
-            float step = 0.9f;        // Now stepping nearly 1 voxel unit
-            float epsilon = 0.05f;    // Bias must be larger than before
-
-            // 1. Start at the center of the current voxel
-            float fx = x + 0.5f;
-            float fy = y + 0.5f;
-            float fz = z + 0.5f;
-
-            // 2. Bias the starting point *towards* the light source, pushing the ray *away* from the current block
-            fx += lightDir.X * epsilon;
-            fy += lightDir.Y * epsilon;
-            fz += lightDir.Z * epsilon;
-
-            for (int i = 0; i < maxSteps; i++)
-            {
-                // 3. Raymarch *away* from the light source
-                fx -= lightDir.X * step;
-                fy -= lightDir.Y * step;
-                fz -= lightDir.Z * step;
-
-                int ix = (int)fx;
-                int iy = (int)fy;
-                int iz = (int)fz;
-
-                // No need for the (ix == x) skip check here, as the bias and larger step should have pushed it out.
-
-                if (ix < 0 || iy < 0 || iz < 0 ||
-                    ix >= chunkSize || iy >= chunkSize || iz >= chunkSize)
-                    return false; // ray left the chunk
-
-                int idx = (iz + chunkSize * (iy + chunkSize * ix));
-                if (data[idx + 3] == 255)
-                    return true; // hit solid voxel
-            }
-
-            return false;
-        }
         public byte[] GenerateChunk(Vector3 chunkCoords)
         {
 
@@ -80,44 +37,6 @@ namespace Voxel_Raytracer
 
             bool emptyChunk = true;
 
-            /*
-            for (int x = 0; x < chunkSize; x++)
-                for (int z = 0; z < chunkSize; z++)
-                {
-                    double xzSquish = squishFactor * Math.Clamp(Math.Pow(perlin.Noise(x + offset.X, z + offset.Z, 1) + 1, 2), 0.5, 1.5);
-
-                    for (int y = 0; y < chunkSize; y++)
-                    {
-                        double worldX = x + offset.X;
-                        double worldY = y + offset.Y;
-                        double worldZ = z + offset.Z;
-
-
-                        double sampleX = (worldX / resolution) * scale;
-                        double sampleY = (worldY / resolution) * scale;
-                        double sampleZ = (worldZ / resolution) * scale;
-
-                        double density = perlin.FBM3D(sampleX, sampleZ, sampleY, 1);
-                        double densityModifier = (baseHeight - worldY) / xzSquish;
-                        double finalDensity = density + densityModifier;
-
-                        if (finalDensity > 0.9)
-                        {
-                            double lightDiff = 10 * rnd.NextDouble();
-                            int baseIndex = (z + chunkSize * (y + chunkSize * x));
-                            // solid material
-                            result[baseIndex] = (byte)(200 + lightDiff); // R
-                            result[baseIndex + 1] = (byte)(200 + lightDiff); // G
-                            result[baseIndex + 2] = (byte)(200 + lightDiff); // B
-                            result[baseIndex + 3] = 255; // filled (1.0f)
-                            emptyChunk = false;
-                        }
-                        
-                        // no else needed since default is already 0
-
-                    }
-                }
-            */
             for (int x = 0; x < chunkSize; x++)
                 for (int z = 0; z < chunkSize; z++)
                 {
@@ -210,7 +129,7 @@ namespace Voxel_Raytracer
                     {
                         int base_id = (z + chunkSize * (y + chunkSize * x));
 
-                        if (result[base_id] == 2 && treeRand.NextDouble() < 0.0015)      // tree frequency
+                        if (result[base_id] == 2 && treeRand.NextDouble() < 0.0065)      // tree frequency
                         {
                             string[] content;
 
