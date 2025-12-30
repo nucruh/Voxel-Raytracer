@@ -22,11 +22,15 @@ namespace Voxel_Raytracer
 
         static readonly string[] preset_birch = File.ReadAllLines("presets/birch.ply");
         static readonly string[] preset_fir = File.ReadAllLines("presets/alpine_fir.ply");
-        public byte[] GenerateChunk(Vector3 chunkCoords)
+        public (byte[], List<int>) GenerateChunk(Vector3 chunkCoords)
         {
 
             // R, G, B, filled
             var result = new byte[chunkSize * chunkSize * chunkSize];
+            List<int> outOfBounds = new List<int>();
+
+            var surface_ids = new int[chunkSize * chunkSize];
+
             Array.Fill(result, (byte)254);
             int arraySize = result.Length;
             var perlin = new PerlinNoise(seed: 1234);
@@ -72,8 +76,12 @@ namespace Voxel_Raytracer
             {
                 result[0] = 255;
 
-                return result;
+                return (result, outOfBounds);
             }
+
+
+
+            int grass_count = 0;
 
             for (int x = 0; x < chunkSize; x++)
                 for (int y = 0; y < chunkSize; y++)
@@ -95,8 +103,9 @@ namespace Voxel_Raytracer
                         {
                             // make base block grass
                             result[baseIndex] = 2;
+                            surface_ids[grass_count] = baseIndex;
 
-
+                            grass_count++;
                         }
                         else
                             continue;
@@ -121,68 +130,99 @@ namespace Voxel_Raytracer
 
             Random treeRand = new Random((int)(chunkCoords.X * 24957 + chunkCoords.Y * 135 + chunkCoords.Z * 13581)); // deterministic per chunk
 
-            for (int x = 2; x < chunkSize - 2; x++)
-                for (int z = 2; z < chunkSize - 2; z++)
+
+            foreach (var grassId in surface_ids)
+            {
+                int x = grassId / (chunkSize * chunkSize);
+                int y = (grassId / chunkSize) % chunkSize;
+                int z = grassId % chunkSize;
+
+                double next = treeRand.NextDouble();
+
+                if (next < 0.0065)
                 {
-                    // find grass surface
-                    for (int y = chunkSize - 4; y >= 2; y--)
+                    string[] content;
+
+
+
+                    if (y + chunkCoords.Y * chunkSize > 80)
+                        content = preset_fir;
+                    else
+                        content = preset_birch;
+
+
+                    bool end_of_header = false;
+
+                    foreach (var item in content)
                     {
-                        int base_id = (z + chunkSize * (y + chunkSize * x));
-
-                        if (result[base_id] == 2 && treeRand.NextDouble() < 0.0065)      // tree frequency
+                        if (!end_of_header)
                         {
-                            string[] content;
-
-                            if (y + chunkCoords.Y * chunkSize > 80)
-                                content = preset_fir;
-                            else
-                                content = preset_birch;
-
-
-                            bool end_of_header = false;
-
-                            foreach (var item in content)
-                            {
-                                if (!end_of_header)
-                                {
-                                    if (item == "end_header")
-                                        end_of_header = true;
-                                    continue;
-                                }
-
-                                string[] split = item.Split(' ');
-                                int _x = int.Parse(split[0]) + x;
-                                int _z = int.Parse(split[1]) + z;
-                                int _y = int.Parse(split[2]) + y;
-                                int _r = int.Parse(split[3]);
-                                int _g = int.Parse(split[4]);
-                                int _b = int.Parse(split[5]);
-
-                                // make sure its not out of bounds
-                                if (_x < 0 || _x >= chunkSize || _y < 0 || _y >= chunkSize || _z < 0 || _z >= chunkSize)
-                                    continue;
-
-
-                                int voxel_id = (_z + chunkSize * (_y + chunkSize * _x));
-
-                                byte blockId;
-                                switch (_r, _g)
-                                {
-                                    case (141, 180): blockId = 5; break; // birch_leaves
-                                    case (221, 221): blockId = 3; break; // birch_log
-
-                                    case (125, 150): blockId = 6; break; // pine_leaves
-                                    case (102, 51): blockId = 4; break; // pine_log
-                                    default: blockId = 0; break;
-                                }
-
-                                result[voxel_id] = blockId;
-                            }
+                            if (item == "end_header")
+                                end_of_header = true;
+                            continue;
                         }
+
+                        string[] split = item.Split(' ');
+                        int _x = int.Parse(split[0]) + x;
+                        int _z = int.Parse(split[1]) + z;
+                        int _y = int.Parse(split[2]) + y + 1; // spawn above grass block
+                        int _r = int.Parse(split[3]);
+                        int _g = int.Parse(split[4]);
+                        int _b = int.Parse(split[5]);
+
+
+
+
+                        int voxel_id = (_z + chunkSize * (_y + chunkSize * _x));
+
+                        byte blockId;
+                        switch (_r, _g)
+                        {
+                            case (141, 180): blockId = 5; break; // birch_leaves
+                            case (221, 221): blockId = 3; break; // birch_log
+
+                            case (125, 150): blockId = 6; break; // pine_leaves
+                            case (102, 51): blockId = 4; break; // pine_log
+                            default: blockId = 0; break;
+                        }
+
+                        // make sure its not out of bounds
+                        if (_x < 0 || _x >= chunkSize || _y < 0 || _y >= chunkSize || _z < 0 || _z >= chunkSize)
+                        {
+                            outOfBounds.Add(_x);
+                            outOfBounds.Add(_y);
+                            outOfBounds.Add(_z);
+                            outOfBounds.Add(blockId);
+                            continue;
+                        }
+
+
+                        result[voxel_id] = blockId;
                     }
+
+
                 }
+
+                if (next > 0.7)
+                {
+                    result[(z + chunkSize * (y + 1 + chunkSize * x))] = 128;
+                    continue;
+                }
+
+                if (next > 0.4)
+                {
+                    result[(z + chunkSize * (y + 1 + chunkSize * x))] = 129;
+                    continue;
+                }
+
+                if (next > 0.0065)
+                {
+                    result[(z + chunkSize * (y + 1 + chunkSize * x))] = 130;
+                    continue;
+                }
+            }
             
-            return result;
+            return (result, outOfBounds);
         }
 
     }

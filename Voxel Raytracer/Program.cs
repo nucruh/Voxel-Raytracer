@@ -47,7 +47,7 @@ namespace Voxel_Raytracer
         static double generationTime = 0;
 
         int blockTextureArray;
-        const int BLOCK_TEX_SIZE = 32;
+        const int BLOCK_TEX_SIZE = 16;
         const int BLOCK_TEX_LAYERS = 256;
 
         private Chunk[] _chunks;
@@ -172,18 +172,18 @@ namespace Voxel_Raytracer
 
         byte[] LoadBlockTexture(int id)
         {
-            string path = $"textures/{id}.png";
+            string path = $"textures16x/{id}.png";
 
             if (!File.Exists(path))
             {
                 Console.WriteLine(id);
-                    path = "textures/1.png"; // dirt texture as default if nto found
+                    path = "textures16x/1.png"; // dirt texture as default if nto found
             }
             using var bmp = new System.Drawing.Bitmap(path);
             var data = new byte[BLOCK_TEX_SIZE * BLOCK_TEX_SIZE * 4];
 
             int i = 0;
-            for (int y = 0; y < BLOCK_TEX_SIZE; y++)
+            for (int y = BLOCK_TEX_SIZE - 1; y >= 0; y--)
             {
                 for (int x = 0; x < BLOCK_TEX_SIZE; x++)
                 {
@@ -208,22 +208,73 @@ namespace Voxel_Raytracer
             var terrain = new Terrain();
             var watch = Stopwatch.StartNew();
 
+            // Use ConcurrentDictionary for thread safety
+            ConcurrentDictionary<(int x, int y, int z), List<int>> outOfBounds = new ConcurrentDictionary<(int x, int y, int z), List<int>>();
+            ConcurrentDictionary<(int x, int y, int z), long> associatedTuples = new ConcurrentDictionary<(int x, int y, int z), long>();
+
             int worldHeightChunks = config.worldHeightChunks;
             Chunk[] chunks = new Chunk[worldSize * worldHeightChunks * worldSize];
 
+            // Parallel generation
             Parallel.For(0, chunks.Length, idx =>
             {
                 int x = idx / (worldSize * worldHeightChunks);
                 int z = (idx / worldHeightChunks) % worldSize;
                 int y = idx % worldHeightChunks;
 
+                (byte[] resultVD, List<int> resultOOB) = terrain.GenerateChunk(new System.Numerics.Vector3(x, y, z));
+
+                // Use thread-safe operations to update dictionaries
+                outOfBounds[(x, y, z)] = resultOOB;
+                associatedTuples[(x, y, z)] = idx;
+
                 chunks[idx] = new Chunk
                 {
                     coords = new Vector3i(x, y, z),
-                    voxelData = terrain.GenerateChunk(new System.Numerics.Vector3(x, y, z)),
+                    voxelData = resultVD,
                     size = chunkSize
                 };
             });
+
+            // After parallel generation, process the outOfBounds data
+            foreach (var kv in outOfBounds)
+            {
+                int chunkX = kv.Key.x;
+                int chunkY = kv.Key.y;
+                int chunkZ = kv.Key.z;
+
+                for (int i = 0; i < kv.Value.Count; i += 4)
+                {
+                    int x = kv.Value[i];
+                    int y = kv.Value[i + 1];
+                    int z = kv.Value[i + 2];
+                    int id = kv.Value[i + 3];
+
+                    // Compute target chunk coordinates and local voxel coordinates
+                    int targetChunkX = chunkX + Math.DivRem(x, chunkSize, out int localX);
+                    int targetChunkY = chunkY + Math.DivRem(y, chunkSize, out int localY);
+                    int targetChunkZ = chunkZ + Math.DivRem(z, chunkSize, out int localZ);
+
+                    // Adjust local coordinates and chunk boundaries
+                    if (localX < 0) { localX += chunkSize; targetChunkX--; }
+                    if (localY < 0) { localY += chunkSize; targetChunkY--; }
+                    if (localZ < 0) { localZ += chunkSize; targetChunkZ--; }
+
+                    localX = (localX + chunkSize) % chunkSize;
+                    localY = (localY + chunkSize) % chunkSize;
+                    localZ = (localZ + chunkSize) % chunkSize;
+                    int voxelId = localZ + chunkSize * (localY + chunkSize * localX);
+
+                    // Early exit checks
+                    if (targetChunkX < 0 || targetChunkY < 0 || targetChunkZ < 0) continue;
+                    if (!associatedTuples.TryGetValue((targetChunkX, targetChunkY, targetChunkZ), out long chunkId)) continue;
+                    if (voxelId < 0 || voxelId >= chunkSize * chunkSize * chunkSize) continue;
+
+                    // Update the voxel data for the chunk
+                    chunks[chunkId].voxelData[voxelId] = (byte)id;
+                }
+            }
+
 
             // Upload voxel chunks
             for (int c = 0; c < chunks.Length; c++)
@@ -340,6 +391,8 @@ namespace Voxel_Raytracer
 
             float delta = moveSpeed * (float)deltaTime;
 
+            if (input.IsKeyDown(Keys.LeftShift)) delta *= 0.07f;
+
             if (input.IsKeyDown(Keys.W)) camPos += cameraForward * delta;
             if (input.IsKeyDown(Keys.S)) camPos -= cameraForward * delta;
             if (input.IsKeyDown(Keys.A)) camPos -= camRight * delta;
@@ -351,6 +404,8 @@ namespace Voxel_Raytracer
                 CursorState = CursorState.Normal;
             }
         }
+
+        private float iTime = 0.0f;
 
         protected override void OnRenderFrame(FrameEventArgs args)
         {
@@ -389,8 +444,9 @@ namespace Voxel_Raytracer
             // send uniforms 
             int resLoc = GL.GetUniformLocation(program, "iResolution");
             GL.Uniform2(resLoc, (float)width, (float)height);
+            iTime += (float)args.Time;
             int timeLoc = GL.GetUniformLocation(program, "iTime");
-            GL.Uniform1(timeLoc, (float)args.Time);
+            GL.Uniform1(timeLoc, iTime);
             int camPosLoc = GL.GetUniformLocation(program, "uCamPos");
             GL.Uniform3(camPosLoc, camPos);
             int forwardLoc = GL.GetUniformLocation(program, "uCamForward");

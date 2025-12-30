@@ -9,6 +9,11 @@
 5 - birch_leaves
 6 - pine_leaves
 
+128 - grass regular
+129 - grass shorter
+130 - grass shortest
+
+
 
 254 - air
-255 - whole chunk is air	
+255 - whole chunk is air
