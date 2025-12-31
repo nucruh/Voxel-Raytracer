@@ -17,6 +17,7 @@ uniform sampler2DArray uBlockTextures;
 
 float fogEnd = 200.0;
 float fogStart = 50.0;
+float shadowDistance = 150.0;
 
 const int CHUNK_SIZE = 128;
 const int CHUNK_PWR  = 7;
@@ -39,6 +40,15 @@ const int MAX_STEPS = 300;
 const vec3 SUN_DIR = normalize(vec3(1.0, -1.0, 0.5));
 const int SHADOW_STEPS = 48;
 const float SHADOW_BIAS = 0.01;
+
+const vec3 GRASS_LIGHT_NORMAL = -SUN_DIR;
+const vec3 FOLIAGE_TINT = vec3(110.0 / 255.0, 166.0 / 255.0, 94.0 / 255.0);
+
+vec3 GetBlockNormal(int mask, ivec3 step){
+    if(mask == 0)      return vec3(-step.x, 0, 0);
+    else if(mask == 1) return vec3(0, -step.y, 0);
+    else               return vec3(0, 0, -step.z);
+}
 
 // ---------- utilities ----------
 float hash21(vec2 p){
@@ -112,110 +122,78 @@ float Wave(float time, float frequency, float amplitude, float position) {
     return amplitude * sin(frequency * position + time);  // Adjusted for animation speed
 }
 
+
+const float ROT = 0.70710678;
+
 bool IntersectGrass(
     vec3 ro, vec3 rd, ivec3 voxel,
     float maxT, out float tHit, out vec3 nHit, out float alpha
 ){
     vec3 o = ro - vec3(voxel);
+
     float bestT = maxT;
-    vec3 normal = vec3(0.0);
+    vec3 bestN = vec3(0.0);
     alpha = 0.0;
     bool hit = false;
 
-    const float W = 0.45; // Width from center
-    
-    // Wind Configuration
+    const float W = 0.5;
+    const float ROT = 0.70710678; // cos/sin 45°
+
+    // wind
     float windSpeed = 1.2;
-    float windStrength = 0.1; // Increased slightly for visibility
-    float windPhase = hash21(vec2(voxel.x, voxel.z)) * 6.28; 
+    float windStrength = 0.05;
+    float windPhase = hash21(vec2(voxel.x, voxel.z)) * 6.28318;
 
-    // --- X-Facing Grass (runs along Z axis) ---
-    if(abs(rd.x) > 1e-6){
-        // 1. Initial hit with the FLAT plane at x = 0.5
-        float t = (0.5 - o.x)/rd.x;
-        
-        if(t > 0.0 && t < bestT){
-            // 2. Calculate initial hit position
-            vec3 p = o + rd * t;
-            
-            // Check approximate vertical bounds to save calculations
-            if(p.y > -0.2 && p.y < 1.2) { 
-                
-                // 3. Calculate Sway amount at this height
-                //    Clamp p.y so calculations don't explode outside [0,1]
-                float h = clamp(p.y, 0.0, 1.0);
-                float sway = sin(iTime * windSpeed + windPhase) * windStrength * h;
+    // two crossed planes rotated 45°
+    vec3 planes[2] = vec3[2](
+        normalize(vec3( ROT, 0.0,  ROT)),
+        normalize(vec3(-ROT, 0.0,  ROT))
+    );
 
-                // 4. 3D REFINEMENT STEP:
-                // The grass isn't at x=0.5, it's at x = 0.5 + sway.
-                // We need to move the ray 't' forward/backward to reach that new X.
-                // The distance to travel in X is 'sway'.
-                // The distance to travel along the ray is 'sway / rd.x'.
-                float t_curved = t + (sway / rd.x);
-                vec3 p_curved = o + rd * t_curved;
+    for(int i = 0; i < 2; i++){
+        vec3 n = planes[i];
 
-                // 5. Check bounds on the REFINED position
-                if(p_curved.y >= 0.0 && p_curved.y <= 1.0 && abs(p_curved.z - 0.5) <= W){
-                    
-                    // 6. Texture Mapping
-                    // Since the geometry is physically bent, we just read the UVs
-                    // directly from the hit point. No "inverse" math needed.
-                    // The sway moves the mesh, but the texture stays pinned to the mesh.
-                    vec2 texUV = vec2(p_curved.z, p_curved.y);
+        float denom = dot(rd, n);
+        if(abs(denom) < 1e-6) continue;
 
-                    float a = texture(uBlockTextures, vec3(texUV, 7)).a;
-                    if(a > 0.0){
-                        bestT = t_curved;
-                        // Calculate a simplified normal vector that considers the bend
-                        // (Slope of sway is roughly windStrength)
-                        float slope = cos(iTime * windSpeed + windPhase) * windStrength; 
-                        normal = normalize(vec3(sign(-rd.x), -slope * sign(-rd.x), 0.0));
-                        alpha = a;
-                        hit = true;
-                    }
-                }
-            }
-        }
-    }
+        float t = dot(vec3(0.5) - o, n) / denom;
+        if(t <= 0.0 || t >= bestT) continue;
 
-    // --- Z-Facing Grass (runs along X axis) ---
-    if(abs(rd.z) > 1e-6){
-        float t = (0.5 - o.z) / rd.z;
-        
-        if(t > 0.0 && t < bestT){
-            vec3 p = o + rd * t;
-            
-            if(p.y > -0.2 && p.y < 1.2){
-                
-                float h = clamp(p.y, 0.0, 1.0);
-                float sway = sin(iTime * windSpeed + windPhase + 1.5) * windStrength * h;
-                
-                // Refine T
-                float t_curved = t + (sway / rd.z);
-                vec3 p_curved = o + rd * t_curved;
+        vec3 p = o + rd * t;
 
-                if(p_curved.y >= 0.0 && p_curved.y <= 1.0 && abs(p_curved.x - 0.5) <= W){
-                    
-                    vec2 texUV = vec2(p_curved.x, p_curved.y);
+        if(p.y < 0.0 || p.y > 1.0) continue;
 
-                    float a = texture(uBlockTextures, vec3(texUV, 7)).a;
-                    if(a > 0.0){
-                        bestT = t_curved;
-                        float slope = cos(iTime * windSpeed + windPhase + 1.5) * windStrength; 
-                        normal = normalize(vec3(0.0, -slope * sign(-rd.z), sign(-rd.z)));
-                        alpha = a;
-                        hit = true;
-                    }
-                }
-            }
+        // wind sway
+        float h = clamp(p.y, 0.0, 1.0);
+        float sway = sin(iTime * windSpeed + windPhase + float(i) * 1.57)
+                     * windStrength * h;
+
+        p += n * sway;
+
+        // width test
+        vec3 d = p - vec3(0.5);
+        float side = dot(d, vec3(-n.z, 0.0, n.x));
+        if(abs(side) > W) continue;
+
+        // UVs
+        vec2 texUV = vec2(
+            side * 0.5 + 0.5,
+            p.y
+        );
+
+        float a = texture(uBlockTextures, vec3(texUV, 7)).a;
+        if(a > 0.0){
+            bestT = t;
+            bestN = n;
+            alpha = a;
+            hit = true;
         }
     }
 
     tHit = bestT;
-    nHit = normal;
+    nHit = bestN;
     return hit;
 }
-
 
 
 // ---------- shadow trace ----------
@@ -316,35 +294,64 @@ void main(){
             0).r;
 
         if(id < 131u && id > 127u){
-            float tg;
-            vec3 gN;
-            float ga;
+float tg;
+vec3 gN;
+float ga;
 
-            if(IntersectGrass(uCamPos, rd, mapPos, 1000.0, tg, gN, ga)){
-                vec3 hitPos = uCamPos + rd*tg;
-                vec3 localPos = clamp(hitPos - vec3(mapPos), 0.0, 1.0);
+vec3 grassCol = vec3(0.0);
+float accumAlpha = 0.0;
+float firstHitT = 0.0;
 
-                vec2 texUV = abs(gN.x) > 0.0 ? vec2(localPos.z, localPos.y) : vec2(localPos.x, localPos.y);
-                vec2 texSize = vec2(textureSize(uBlockTextures,0).xy);
-                vec2 dx = dFdx(texUV * texSize);
-                vec2 dy = dFdy(texUV * texSize);
-                float mip = max(0.0, 0.5*log2(max(dot(dx,dx), dot(dy,dy))));
+// -------- PASS 1 --------
+if(IntersectGrass(uCamPos, rd, mapPos, 1000.0, tg, gN, ga)){
+    vec3 hitPos = uCamPos + rd * tg;
+    vec3 localPos = clamp(hitPos - vec3(mapPos), 0.0, 1.0);
 
-                vec4 texSample = textureLod(uBlockTextures, vec3(texUV,float(id)), mip);
-                float alpha = texSample.a;
+    vec2 texUV = abs(gN.x) > 0.0
+        ? vec2(localPos.z, localPos.y)
+        : vec2(localPos.x, localPos.y);
 
-                // blend
-                hitCol = hitCol * (1.0 - alpha) + texSample.rgb * alpha;
+    vec4 texSample = texture(uBlockTextures, vec3(texUV, float(id)));
 
-                // only stop if fully opaque
-                if(alpha >= 0.99){
-                    hit = true;
-                    hitDist = tg;
-                    normal = gN;
-                    break;
-                }
-                // otherwise continue marching in the voxel to hit the other quad
-            }
+    grassCol += texSample.rgb * texSample.a;
+    grassCol *= FOLIAGE_TINT;
+    accumAlpha += texSample.a;
+    firstHitT = tg;
+
+    // -------- PASS 2 (only if not opaque) --------
+    if(texSample.a < 0.99){
+        float tg2;
+        vec3 gN2;
+        float ga2;
+
+        vec3 ro2 = uCamPos + rd * (tg + 0.002);
+
+        if(IntersectGrass(ro2, rd, mapPos, 1000.0, tg2, gN2, ga2)){
+            vec3 hitPos2 = ro2 + rd * tg2;
+            vec3 localPos2 = clamp(hitPos2 - vec3(mapPos), 0.0, 1.0);
+
+            vec2 texUV2 = abs(gN2.x) > 0.0
+                ? vec2(localPos2.z, localPos2.y)
+                : vec2(localPos2.x, localPos2.y);
+
+            vec4 texSample2 = texture(uBlockTextures, vec3(texUV2, float(id)));
+
+            float a2 = texSample2.a * (1.0 - accumAlpha);
+            grassCol += texSample2.rgb * a2;
+            grassCol *= FOLIAGE_TINT;
+            accumAlpha += a2;
+        }
+    }
+
+    hitCol = mix(hitCol, grassCol, accumAlpha);
+
+if(accumAlpha >= 0.99){
+    hit = true;
+    hitDist = firstHitT;
+    normal = GRASS_LIGHT_NORMAL;
+    break;
+}
+}
         }
         else if(id != 254u && id != 255u){
             hit = true;
@@ -364,6 +371,10 @@ void main(){
             float mip = max(0.0, 0.5*log2(max(dot(dx,dx), dot(dy,dy))));
 
             hitCol = textureLod(uBlockTextures, vec3(texUV,float(id)), mip).rgb;
+            if (id == 2u)
+            {
+                hitCol *= FOLIAGE_TINT;
+            }
 
             if(mask==0) normal = vec3(-step.x,0,0);
             else if(mask==1) normal = vec3(0,-step.y,0);
@@ -386,8 +397,18 @@ void main(){
     if(hit){
         vec3 hitPos = uCamPos + rd*hitDist;
         float diff = max(dot(normal,-SUN_DIR),0.0);
-        float shadow = TraceShadow(hitPos)?0.25:0.9;
-        color = hitCol * (0.6 + diff*shadow);
+
+        float shadow;
+        if (hitDist < shadowDistance)
+        {
+            shadow = TraceShadow(hitPos)?0.25:0.9;
+        }
+        else
+        {
+            shadow = 0.9;
+        }
+
+        color = hitCol * (0.6 + diff*shadow); //* FOLIAGE_TINT;
 
         float fog = clamp(exp(-(hitDist - fogEnd) * 0.05), 0.0, 1.0);
 

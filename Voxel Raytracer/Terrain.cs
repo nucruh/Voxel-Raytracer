@@ -79,8 +79,6 @@ namespace Voxel_Raytracer
                 return (result, outOfBounds);
             }
 
-
-
             int grass_count = 0;
 
             for (int x = 0; x < chunkSize; x++)
@@ -96,7 +94,8 @@ namespace Voxel_Raytracer
                         int above2 = (z + chunkSize * ((y + 2) + chunkSize * x));
 
                         if (above1 >= arraySize || above2 >= arraySize) continue;
-
+                        // keep blocks on high elevations stone
+                        if (y + offset.Y > 150) continue;
 
                         // could maybe omit since not using 3d perlin anymore????? !
                         if (result[above1] == 254 && result[above2] == 254)
@@ -106,25 +105,19 @@ namespace Voxel_Raytracer
                             surface_ids[grass_count] = baseIndex;
 
                             grass_count++;
+                            int below1 = (z + chunkSize * ((y - 1) + chunkSize * x));
+                            int below2 = (z + chunkSize * ((y - 2) + chunkSize * x));
+                            int below3 = (z + chunkSize * ((y - 3) + chunkSize * x));
+
+                            // make bottom 3 dirt if possible (stone below)
+                            if (y > 0 && result[below1] == 0) result[below1] = 1;
+                            if (y > 1 && result[below2] == 0) result[below2] = 1;
+                            if (y > 2 && result[below3] == 0) result[below3] = 1;
                         }
                         else
                             continue;
 
-                            // make bottom ones dirt if they do exist
-
-                        int below1 = (z + chunkSize * ((y - 1) + chunkSize * x));
-                        int below2 = (z + chunkSize * ((y - 2) + chunkSize * x));
-                        int below3 = (z + chunkSize * ((y - 3) + chunkSize * x));
-
-                        // make bottom 3 dirt if possible (stone below)
-                        if (y > 0 && result[below1] == 0)
-                            result[below1] = 1;
-
-                        if (y > 1 && result[below2] == 0)
-                            result[below2] = 1;
-
-                        if (y > 2 && result[below3] == 0)
-                            result[below3] = 1;
+                        // make bottom ones dirt if they do exist
 
                     }
 
@@ -203,21 +196,25 @@ namespace Voxel_Raytracer
 
                 }
 
+                int above = (z + chunkSize * (y + 1 + chunkSize * x));
+
+                if (above > arraySize -1) continue;
+
                 if (next > 0.7)
                 {
-                    result[(z + chunkSize * (y + 1 + chunkSize * x))] = 128;
+                    result[above] = 128;
                     continue;
                 }
 
                 if (next > 0.4)
                 {
-                    result[(z + chunkSize * (y + 1 + chunkSize * x))] = 129;
+                    result[above] = 129;
                     continue;
                 }
 
                 if (next > 0.0065)
                 {
-                    result[(z + chunkSize * (y + 1 + chunkSize * x))] = 130;
+                    result[above] = 130;
                     continue;
                 }
             }

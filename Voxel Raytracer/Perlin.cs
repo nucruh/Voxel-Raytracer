@@ -133,13 +133,15 @@ public class PerlinNoise
         double amplitude = this.amplitude;
         double frequency = this.frequency;
 
-        double sharpness = 10; // Options.sharpness
-        double reverseSharp = 10;
+        double sharpness = 30; // Options.sharpness
+        double reverseSharp = 30;
 
         // Terrain noise for blending
         double terrainNoiseFreq = 0.001;
         double terrainNoise = Noise(x * terrainNoiseFreq, y * terrainNoiseFreq, z * terrainNoiseFreq);
         double blendFactor = terrainNoise;
+
+        int octaveCount = 4;
 
         // Erosion map
         double erosionNoiseFreq = 0.175;
@@ -147,7 +149,7 @@ public class PerlinNoise
         erosion = Math.Clamp(erosion, 0, 1);
 
         // Height modifier using linear spline with SmoothStep
-        double[,] splinePoints = new double[,] { { 0.0, 0 }, { 0.25, 7 }, { 0.5, 12 }, { 0.6, 30 }, { 1.0, 100 } };
+        double[,] splinePoints = new double[,] { { 0.0, 0 }, { 0.25, 7 }, { 0.3, 18 }, { 0.6, 30 }, { 0.8, 100 }, {1.0, 160} };
         double heightMod = splinePoints[splinePoints.GetLength(0) - 1, 1]; // default to last point
 
         for (int i = 0; i < splinePoints.GetLength(0) - 1; i++)
@@ -175,15 +177,7 @@ public class PerlinNoise
         sharpness *= heightMod / 200.0;
         reverseSharp /= (heightMod * 200.0);
 
-        // Loop through octaves (matching Roblox logic)
-        int bracketIndex = 0;
-        for (int i = 0; i < splinePoints.GetLength(0) - 1; i++)
-        {
-            if (erosion >= splinePoints[i, 0])
-                bracketIndex = i;
-        }
 
-        int octaveCount = 4 - (2 - bracketIndex); // Options.octaves - (2 - bracket_index)
         for (int i = 0; i < octaveCount; i++)
         {
             // 3D noise using full x, y, z
