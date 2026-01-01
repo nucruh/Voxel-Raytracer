@@ -218,9 +218,103 @@ namespace Voxel_Raytracer
                     continue;
                 }
             }
-            
+
+
             return (result, outOfBounds);
         }
 
+        public byte[] GenerateSVO(byte[] result)
+        {
+            // -- SPARSE VOXEL OCTREES -- \\
+            /* 
+             * ox - octree x
+             * sx - subregion x
+
+            */
+            if (result[0] == 255)
+                return result;
+
+
+            // 16x16x16
+            int l1 = 16;
+
+            for (int ox = 0; ox < chunkSize; ox += l1)
+                for (int oy = 0; oy < chunkSize; oy += l1)
+                    for (int oz = 0; oz < chunkSize; oz += l1)
+                    {
+                        for (int x = ox; x < ox + l1; x++)
+                            for (int y = oy; y < oy + l1; y++)
+                                for (int z = oz; z < oz + l1; z++)
+                                {
+                                    int baseIndex = z + chunkSize * (y + chunkSize * x);
+                                    if (result[baseIndex] != 254)
+                                        goto endOfL1;
+                                }
+                        // code here runs if whole region was air
+                        int regionHeaderIndex = oz + chunkSize * (oy + chunkSize * ox);
+                        result[regionHeaderIndex] = 253;
+                    //
+                    endOfL1:;
+                    }
+
+            // 32x32x32 (combine 4 16x16x16 regions)
+            int l2 = 32;
+            int stepl2 = 16;
+            for (int ox = 0; ox < chunkSize; ox += l2)
+                for (int oy = 0; oy < chunkSize; oy += l2)
+                    for (int oz = 0; oz < chunkSize; oz += l2)
+                    {
+                        for (int sx = 0; sx < 2; sx++)
+                            for (int sy = 0; sy < 2; sy++)
+                                for (int sz = 0; sz < 2; sz++)
+                                {
+                                    int subX = ox + (sx * stepl2);
+                                    int subY = oy + (sy * stepl2);
+                                    int subZ = oz + (sz * stepl2);
+
+                                    int subRegionHeaderIndex = subZ + chunkSize * (subY + chunkSize * subX);
+                                    if (result[subRegionHeaderIndex] != 253)
+                                        goto endOfL2;
+                                }
+
+                        // code here runs if 8 subregions were detected empty
+                        int regionHeaderIndex32 = oz + chunkSize * (oy + chunkSize * ox);
+                        result[regionHeaderIndex32] = 252;
+
+                    endOfL2:;
+                    }
+
+            // 64x64x64 (combine 8 32x32x32 regions)
+            int l3 = 64;
+            int stepl3 = 32;
+
+            for (int ox = 0; ox < chunkSize; ox += l3)
+                for (int oy = 0; oy < chunkSize; oy += l3)
+                    for (int oz = 0; oz < chunkSize; oz += l3)
+                    {
+                        for (int sx = 0; sx < 2; sx++)
+                            for (int sy = 0; sy < 2; sy++)
+                                for (int sz = 0; sz < 2; sz++)
+                                {
+                                    int subX = ox + (sx * stepl3);
+                                    int subY = oy + (sy * stepl3);
+                                    int subZ = oz + (sz * stepl3);
+
+                                    int subRegionHeaderIndex = subZ + chunkSize * (subY + chunkSize * subX);
+
+                                    // check if the 32-block was marked as empty (252)
+                                    if (result[subRegionHeaderIndex] != 252)
+                                        goto endOfL3;
+                                }
+
+                        // code here runs if 8 32x32x32 regions were empty
+                        int regionHeaderIndex64 = oz + chunkSize * (oy + chunkSize * ox);
+                        result[regionHeaderIndex64] = 251; // marker for 64x64x64
+
+                    endOfL3:;
+                    }
+
+            return result;
+        }
     }
 }

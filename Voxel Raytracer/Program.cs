@@ -275,6 +275,18 @@ namespace Voxel_Raytracer
                 }
             }
 
+            Parallel.For(0, chunks.Length, idx =>
+            {
+                var chunk = chunks[idx];
+
+                // Call GenerateSVO on the voxel data
+                // Assuming GenerateSVO takes byte[] and returns byte[]
+                byte[] svoResult = terrain.GenerateSVO(chunk.voxelData);
+
+                // Replace the chunk's voxel data with the SVO result
+                chunk.voxelData = svoResult;
+            });
+
 
             // Upload voxel chunks
             for (int c = 0; c < chunks.Length; c++)

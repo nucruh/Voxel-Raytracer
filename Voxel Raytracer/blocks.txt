@@ -13,7 +13,8 @@
 129 - grass shorter
 130 - grass shortest
 
-
-
+251 - 64x64x64 empty region
+252 - 32x32x32 empty region
+253 - 16x16x16 empty region
 254 - air
-255 - whole chunk is air
+255 - 128x128x128 empty region (whole chunk)
