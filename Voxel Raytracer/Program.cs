@@ -1,22 +1,16 @@
 ﻿using OpenTK.Graphics.OpenGL;
-using OpenTK.Input;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
-using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Drawing;
-using System.Drawing.Imaging;
-using System.Drawing.Printing;
+using System.Runtime.InteropServices;
 
 namespace Voxel_Raytracer
 {
-    // --- Step 3: Program Class with Main Entry Point ---
-    // This static class runs the Renderer when the application starts.
 
-    class Chunk
+    public class Chunk
     {
         public Vector3i coords;   // chunk coordinates
         public int textureId;     // GPU texture
@@ -28,7 +22,6 @@ namespace Voxel_Raytracer
     {
         public static void Main()
         {
-            // Create a new instance of the window and run the game loop
             using Renderer win = new Renderer();
             win.Run();
         }
@@ -44,11 +37,6 @@ namespace Voxel_Raytracer
         static int width => config.width;
         static int height => config.height;
         static int worldSize => config.worldSize;
-
-        int lowResFBO;
-        int lowResTex;
-        int lowW, lowH;
-        int renderScale = 2; // 2 = half res, 4 = quarter res
 
         static int chunkSize => config.chunkSize;
 
@@ -81,12 +69,27 @@ namespace Voxel_Raytracer
 
         int program, vao;
 
+
+
+        // get system resolution
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int nIndex);
+
+        const int SM_CXSCREEN = 0;
+        const int SM_CYSCREEN = 1;
+
+        readonly static int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+        readonly static int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+
+
+
         static NativeWindowSettings nativeSetting = new NativeWindowSettings()
         {
             ClientSize = new Vector2i(width, height),
             Title = "Voxel Engine",
             APIVersion = new Version(3, 3),
             Vsync = OpenTK.Windowing.Common.VSyncMode.Off,
+            Location = new Vector2i(screenWidth / 2 - width / 2, screenHeight / 2 - height / 2),
             NumberOfSamples = 4,
         };
 
@@ -289,80 +292,11 @@ namespace Voxel_Raytracer
             {
                 var chunk = chunks[idx];
 
-                // Call GenerateSVO on the voxel data
-                // Assuming GenerateSVO takes byte[] and returns byte[]
+                // call GenerateSVO on the voxel data
                 byte[] svoResult = terrain.GenerateSVO(chunk.voxelData);
-
-                // Replace the chunk's voxel data with the SVO result
                 chunk.voxelData = svoResult;
             });
 
-
-
-
-            /*
-            int size = chunkSize;
-            int imgW = worldSize * size;
-            int imgH = worldSize * size;
-
-            byte[] pixels_ = new byte[imgW * imgH * 4];
-
-            for (int i = 0; i < chunks.Length; i++)
-            {
-                Chunk chunk = chunks[i];
-                if (chunk == null) continue;
-
-                int cx = chunk.coords.X;
-                int cy = chunk.coords.Y;
-                int cz = chunk.coords.Z;
-
-                byte[] voxels = chunk.voxelData;
-
-                for (int z = 0; z < size; z++)
-                {
-                    for (int x = 0; x < size; x++)
-                    {
-                        int count = 0;
-
-                        for (int y = 0; y < size; y++)
-                        {
-                            // ✅ use the correct index formula from GenerateChunk
-                            int idx = z + size * (y + size * x);
-
-                            if (voxels[idx] != 254)
-                                count += 1;
-                        }
-
-                        int wx = cx * size + x;
-                        int wz = cz * size + z;
-
-                        int p = (wx + wz * imgW) * 4;
-                        int v = pixels_[p] + count;
-                        byte b = (byte)Math.Min(v, 255);
-
-                        pixels_[p + 0] = b;
-                        pixels_[p + 1] = b;
-                        pixels_[p + 2] = b;
-                        pixels_[p + 3] = 255;
-                    }
-                }
-            }
-
-            using Bitmap bmp = new Bitmap(imgW, imgH, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-            BitmapData data = bmp.LockBits(
-                new Rectangle(0, 0, imgW, imgH),
-                ImageLockMode.WriteOnly,
-                bmp.PixelFormat
-            );
-
-            System.Runtime.InteropServices.Marshal.Copy(pixels_, 0, data.Scan0, pixels_.Length);
-            bmp.UnlockBits(data);
-
-            // flip vertically so +Z is up
-            bmp.RotateFlip(RotateFlipType.RotateNoneFlipY);
-
-            bmp.Save("world_debug.png", ImageFormat.Png);
-            */
 
             // Upload voxel chunks
             for (int c = 0; c < chunks.Length; c++)
@@ -380,7 +314,7 @@ namespace Voxel_Raytracer
             GL.UseProgram(program);
 
             // ============================================================
-            // 1️⃣ BLOCK TEXTURE ARRAY → UNIT 0
+            // 1️ BLOCK TEXTURE ARRAY → UNIT 0
             // ============================================================
             blockTextureArray = GL.GenTexture();
             GL.ActiveTexture(TextureUnit.Texture0);
@@ -433,7 +367,7 @@ namespace Voxel_Raytracer
             );
 
             // ============================================================
-            // 2️⃣ VOXEL CHUNKS → UNITS [1..N]
+            // 2️ VOXEL CHUNKS → UNITS [1..N]
             // ============================================================
             for (int i = 0; i < chunks.Length; i++)
             {
@@ -479,6 +413,8 @@ namespace Voxel_Raytracer
 
             float delta = moveSpeed * (float)deltaTime;
 
+            Vector3 oldCamPos = camPos;
+
             if (input.IsKeyDown(Keys.LeftShift)) delta *= 0.07f;
 
             if (input.IsKeyDown(Keys.W)) camPos += cameraForward * delta;
@@ -486,6 +422,37 @@ namespace Voxel_Raytracer
             if (input.IsKeyDown(Keys.A)) camPos -= camRight * delta;
             if (input.IsKeyDown(Keys.D)) camPos += camRight * delta;
             if (input.IsKeyDown(Keys.Space)) camPos += Vector3.UnitY * delta;
+
+            int cx = (int)camPos.X / chunkSize;
+            int cy = (int)camPos.Y / chunkSize;
+            int cz = (int)camPos.Z / chunkSize;
+
+            int vx = (int)camPos.X % chunkSize;
+            int vy = (int)camPos.Y % chunkSize;
+            int vz = (int)camPos.Z % chunkSize;
+
+            int cId = (cx * worldSize + cz) * worldSize + cy;
+            int vId = vz + chunkSize * (vy + chunkSize * vx);
+
+            int blockId = _chunks[cId].voxelData[vId];
+
+            Vector3 hitPos;
+            int hitId;
+
+            VoxelUtil.Raycast(oldCamPos, cameraForward, _chunks, chunkSize, worldSize, 5, 1f, true, out hitPos, out hitId);
+
+
+            Console.WriteLine($"{cx} {cy} {cz} chunk pos {cId}");
+            Console.WriteLine($"{vx} {vy} {vz} voxel pos {vId}");
+            Console.WriteLine($"{blockId} blockid");
+            Console.WriteLine($"ray: {hitPos} {hitId}");
+
+            if (hitId > 0)
+            {
+                camPos = oldCamPos;
+            }
+
+            Console.WriteLine($" ");
 
             if (input.IsKeyDown(Keys.Escape))
             {

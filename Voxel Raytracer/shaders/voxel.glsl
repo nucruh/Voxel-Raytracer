@@ -85,49 +85,6 @@ float ComputeGodRaysFast(vec3 ro, vec3 rd, float maxDist){
     return illum;
 }
 
-// ---------- chunk skip ----------
-int SkipEmptyChunk(
-    inout ivec3 pos,
-    inout vec3 sideDist,
-    vec3 deltaDist,
-    ivec3 step,
-    inout float t
-){
-    int lx = pos.x & CHUNK_MASK;
-    int ly = pos.y & CHUNK_MASK;
-    int lz = pos.z & CHUNK_MASK;
-
-    int nx = (step.x > 0) ? (CHUNK_SIZE - lx) : (lx + 1);
-    int ny = (step.y > 0) ? (CHUNK_SIZE - ly) : (ly + 1);
-    int nz = (step.z > 0) ? (CHUNK_SIZE - lz) : (lz + 1);
-
-    float tx = sideDist.x + float(nx - 1) * deltaDist.x;
-    float ty = sideDist.y + float(ny - 1) * deltaDist.y;
-    float tz = sideDist.z + float(nz - 1) * deltaDist.z;
-
-    if(tx <= ty && tx <= tz){
-        t = tx;
-        pos.x += step.x * nx;
-        sideDist.x = tx + deltaDist.x;
-        return 0;
-    }else if(ty <= tz){
-        t = ty;
-        pos.y += step.y * ny;
-        sideDist.y = ty + deltaDist.y;
-        return 1;
-    }else{
-        t = tz;
-        pos.z += step.z * nz;
-        sideDist.z = tz + deltaDist.z;
-        return 2;
-    }
-}
-
-// Sine wave function for animating the grass
-float Wave(float time, float frequency, float amplitude, float position) {
-    return amplitude * sin(frequency * position + time);  // Adjusted for animation speed
-}
-
 
 const float ROT = 0.70710678;
 
@@ -143,14 +100,14 @@ bool IntersectGrass(
     bool hit = false;
 
     const float W = 0.5;
-    const float ROT = 0.70710678; // cos/sin 45°
+    const float ROT = 0.70710678; // cos(45°)
 
-    // wind
-    float windSpeed = 1.2;
-    float windStrength = 0.05;
+    // Wind parameters
+    float windSpeed = 2.0;       // speed of sway
+    float windStrength = 0.15;   // horizontal offset
     float windPhase = hash21(vec2(voxel.x, voxel.z)) * 6.28318;
 
-    // two crossed planes rotated 45°
+    // Two crossed planes
     vec3 planes[2] = vec3[2](
         normalize(vec3( ROT, 0.0,  ROT)),
         normalize(vec3(-ROT, 0.0,  ROT))
@@ -158,40 +115,45 @@ bool IntersectGrass(
 
     for(int i = 0; i < 2; i++){
         vec3 n = planes[i];
+        vec3 swayDir = vec3(-n.z, 0.0, n.x); // horizontal along blade
 
         float denom = dot(rd, n);
         if(abs(denom) < 1e-6) continue;
 
+        // Plane intersection
         float t = dot(vec3(0.5) - o, n) / denom;
         if(t <= 0.0 || t >= bestT) continue;
 
         vec3 p = o + rd * t;
-
         if(p.y < 0.0 || p.y > 1.0) continue;
 
-        // wind sway
-        float h = clamp(p.y, 0.0, 1.0);
-        float sway = sin(iTime * windSpeed + windPhase + float(i) * 1.57)
-                     * windStrength * h;
-
-        p += n * sway;
-
-        // width test
+        // Width check
         vec3 d = p - vec3(0.5);
-        float side = dot(d, vec3(-n.z, 0.0, n.x));
+        float side = dot(d, swayDir);
         if(abs(side) > W) continue;
 
-        // UVs
-        vec2 texUV = vec2(
-            side * 0.5 + 0.5,
-            p.y
-        );
+        // ------------------------
+        // Compute swaying offset
+        // ------------------------
+        float swayFactor = pow(p.y, 2.0); // top moves more
+        float wave = sin(iTime * windSpeed + windPhase + float(i) * 1.57) 
+                     * windStrength * swayFactor;
 
-        float a = texture(uBlockTextures, vec3(texUV, 7)).a;
-        if(a > 0.0){
+        // Offset the intersection point for visual sway
+        vec3 pSway = p + swayDir * wave;
+
+        // UV coordinates for texture
+        vec2 texUV;
+        texUV.y = p.y; // vertical along blade
+        texUV.x = clamp(dot(pSway - vec3(0.5), swayDir) / W * 0.5 + 0.5, 0.0, 1.0);
+
+        // Sample texture
+        vec4 texSample = texture(uBlockTextures, vec3(texUV, 7));
+
+        if(texSample.a > 0.0){
             bestT = t;
             bestN = n;
-            alpha = a;
+            alpha = texSample.a;
             hit = true;
         }
     }
@@ -278,74 +240,6 @@ bool TraceShadow(vec3 startPos){
     }
 
     return false;
-}
-int SkipEmptySVO(
-    inout ivec3 pos,
-    inout vec3 sideDist,
-    vec3 deltaDist,
-    ivec3 step,
-    inout float t
-){
-    int lx = pos.x & SVO_MASK;
-    int ly = pos.y & SVO_MASK;
-    int lz = pos.z & SVO_MASK;
-
-    int nx = (step.x > 0) ? (SVO_SIZE - lx) : lx;
-    int ny = (step.y > 0) ? (SVO_SIZE - ly) : ly;
-    int nz = (step.z > 0) ? (SVO_SIZE - lz) : lz;
-
-    float tx = sideDist.x + float(nx) * deltaDist.x;
-    float ty = sideDist.y + float(ny) * deltaDist.y;
-    float tz = sideDist.z + float(nz) * deltaDist.z;
-
-    if(tx <= ty && tx <= tz){
-        t = tx;
-        pos.x += step.x * (nx + 1);
-        sideDist.x = tx;
-        return 0;
-    }else if(ty <= tz){
-        t = ty;
-        pos.y += step.y * (ny + 1);
-        sideDist.y = ty;
-        return 1;
-    }else{
-        t = tz;
-        pos.z += step.z * (nz + 1);
-        sideDist.z = tz;
-        return 2;
-    }
-}
-
-void StepSVO(
-    inout ivec3 mapPos,
-    inout vec3 sideDist,
-    vec3 deltaDist,
-    ivec3 step,
-    out int mask,
-    ivec3 localPos
-){
-    // distance to next SVO boundary along each axis
-    vec3 nextBoundary = vec3(
-        (step.x > 0) ? float((localPos.x & SVO_MASK) + 1) : float(localPos.x & SVO_MASK),
-        (step.y > 0) ? float((localPos.y & SVO_MASK) + 1) : float(localPos.y & SVO_MASK),
-        (step.z > 0) ? float((localPos.z & SVO_MASK) + 1) : float(localPos.z & SVO_MASK)
-    );
-
-    vec3 txyz = sideDist + nextBoundary * deltaDist;
-
-    if(txyz.x <= txyz.y && txyz.x <= txyz.z){
-        mask = 0;
-        sideDist.x = txyz.x;
-        mapPos.x += step.x * int(nextBoundary.x);
-    } else if(txyz.y <= txyz.z){
-        mask = 1;
-        sideDist.y = txyz.y;
-        mapPos.y += step.y * int(nextBoundary.y);
-    } else{
-        mask = 2;
-        sideDist.z = txyz.z;
-        mapPos.z += step.z * int(nextBoundary.z);
-    }
 }
 
 // ---------- main ----------

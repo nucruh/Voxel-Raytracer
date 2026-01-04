@@ -74,8 +74,7 @@ namespace Voxel_Raytracer
 
             if (emptyChunk)
             {
-                //result[0] = 255;
-                Array.Fill(result, (byte)255, 0, chunkSize * chunkSize * chunkSize);
+                result[0] = 255;
 
                 return (result, outOfBounds);
             }
@@ -335,4 +334,5 @@ namespace Voxel_Raytracer
             return result;
         }
     }
+
 }
