@@ -1,4 +1,4 @@
-﻿#version 330 core
+﻿#version 430 core
 out vec4 FragColor;
 
 uniform vec2 iResolution;
@@ -10,7 +10,6 @@ uniform vec3 uCamRight;
 uniform vec3 uCamUp;
 
 uniform usampler3D uVoxelTex[64];
-uniform usamplerBuffer uChunkHeaders; // do not delete this comment!!! shadows use this but i dont think its ever given to it thru cpu side
 uniform ivec3 uVoxelDim;
 
 uniform sampler2DArray uBlockTextures;
@@ -18,10 +17,17 @@ uniform sampler2DArray uBlockTextures;
 float fogEnd = 200.0;
 float fogStart = 50.0;
 float shadowDistance = 150.0;
+float grassDistance = 100.0;
 
 const int CHUNK_SIZE = 128;
 const int CHUNK_PWR  = 7;
 const int CHUNK_MASK = CHUNK_SIZE - 1;
+
+
+const int SVO_SIZE = 16;
+const int SVO_PWR  = 4;
+const int SVO_MASK = SVO_SIZE - 1;
+
 
 const int WORLD_SIZE_X = 4;
 const int WORLD_SIZE_Y = 4;
@@ -214,6 +220,7 @@ bool TraceShadow(vec3 startPos){
     float t = 0.0;
 
     for(int i=0;i<SHADOW_STEPS;i++){
+        // Out of world
         if(any(lessThan(mapPos, ivec3(0))) ||
            mapPos.x>=WORLD_VOX_X || mapPos.y>=WORLD_VOX_Y || mapPos.z>=WORLD_VOX_Z)
             return false;
@@ -221,83 +228,125 @@ bool TraceShadow(vec3 startPos){
         int cx = mapPos.x>>CHUNK_PWR;
         int cy = mapPos.y>>CHUNK_PWR;
         int cz = mapPos.z>>CHUNK_PWR;
-
         int chunkIndex = cx*(WORLD_SIZE_Y*WORLD_SIZE_Z)+cz*WORLD_SIZE_Y+cy;
-        uint header = texelFetch(uChunkHeaders, chunkIndex).r;
-
-        if(header == 255u){
-            SkipEmptyChunk(mapPos, sideDist, deltaDist, step, t);
-            continue;
-        }
 
         uint id = texelFetch(
             uVoxelTex[chunkIndex],
             ivec3(mapPos.z&CHUNK_MASK,mapPos.y&CHUNK_MASK,mapPos.x&CHUNK_MASK),
-            0).r;
+            0
+        ).r;
 
-        if(id != 254u && (id < 128u || id > 130u)) return true;
+        // Check SVO sizes
+        int svoSize = 1;
+        int svoMask = 0;
+        if(id == 253u){ svoSize = 16; svoMask = 15; }
+        else if(id == 252u){ svoSize = 32; svoMask = 31; }
+        else if(id == 251u){ svoSize = 64; svoMask = 63; }
 
-        if(sideDist.x<sideDist.y){
-            if(sideDist.x<sideDist.z){ sideDist.x+=deltaDist.x; mapPos.x+=step.x; }
+        // Skip empty SVO region
+        if(id == 253u || id == 252u || id == 251u){
+            int sx = (step.x > 0) ? (svoSize - (mapPos.x & svoMask)) : ((mapPos.x & svoMask) + 1);
+            int sy = (step.y > 0) ? (svoSize - (mapPos.y & svoMask)) : ((mapPos.y & svoMask) + 1);
+            int sz = (step.z > 0) ? (svoSize - (mapPos.z & svoMask)) : ((mapPos.z & svoMask) + 1);
+
+            int steps = min(sx, min(sy, sz));
+            if(steps <= 0) steps = 1;
+
+            for(int k=0;k<steps;k++){
+                if(sideDist.x < sideDist.y){
+                    if(sideDist.x < sideDist.z){ t=sideDist.x; sideDist.x+=deltaDist.x; mapPos.x+=step.x; }
+                    else{ t=sideDist.z; sideDist.z+=deltaDist.z; mapPos.z+=step.z; }
+                }else{
+                    if(sideDist.y < sideDist.z){ t=sideDist.y; sideDist.y+=deltaDist.y; mapPos.y+=step.y; }
+                    else{ t=sideDist.z; sideDist.z+=deltaDist.z; mapPos.z+=step.z; }
+                }
+            }
+            continue;
+        }
+
+        // Hit solid voxel
+        if(id < 251u && (id < 128u || id > 130u)) return true;
+
+        // Step to next voxel
+        if(sideDist.x < sideDist.y){
+            if(sideDist.x < sideDist.z){ sideDist.x+=deltaDist.x; mapPos.x+=step.x; }
             else{ sideDist.z+=deltaDist.z; mapPos.z+=step.z; }
         }else{
-            if(sideDist.y<sideDist.z){ sideDist.y+=deltaDist.y; mapPos.y+=step.y; }
+            if(sideDist.y < sideDist.z){ sideDist.y+=deltaDist.y; mapPos.y+=step.y; }
             else{ sideDist.z+=deltaDist.z; mapPos.z+=step.z; }
         }
     }
+
     return false;
 }
-
-int SkipSVONode(
-    inout ivec3 pos,       // current voxel position in world space
-    inout vec3 sideDist,   // DDA distances along each axis
-    vec3 deltaDist,        // precomputed 1/rayDir along each axis
-    ivec3 step,            // +1 or -1 per axis
-    int nodeSize,          // size of the empty node (e.g., 16)
-    inout float t          // current ray distance
+int SkipEmptySVO(
+    inout ivec3 pos,
+    inout vec3 sideDist,
+    vec3 deltaDist,
+    ivec3 step,
+    inout float t
 ){
-    // 1. Calculate steps to the next node boundary
-    // Bitwise magic works for positive integers. 
-    // For general robustness with negative coords, this logic handles the grid alignment:
-    
-    // Position within the node (0..15)
-    ivec3 local = pos & (nodeSize - 1);
-    
-    // Steps required to exit the node on each axis
-    ivec3 nSteps = ivec3(
-        (step.x > 0) ? (nodeSize - local.x) : (local.x + 1),
-        (step.y > 0) ? (nodeSize - local.y) : (local.y + 1),
-        (step.z > 0) ? (nodeSize - local.z) : (local.z + 1)
-    );
+    int lx = pos.x & SVO_MASK;
+    int ly = pos.y & SVO_MASK;
+    int lz = pos.z & SVO_MASK;
 
-    // 2. Calculate the distance to reach that boundary
-    // We add (nSteps-1) * delta because sideDist is already at the 1st boundary.
-    vec3 boundaryDist = sideDist + vec3(nSteps - 1) * deltaDist;
+    int nx = (step.x > 0) ? (SVO_SIZE - lx) : lx;
+    int ny = (step.y > 0) ? (SVO_SIZE - ly) : ly;
+    int nz = (step.z > 0) ? (SVO_SIZE - lz) : lz;
 
-    // 3. Find the nearest axis
-    // If multiple axes hit at the exact same float distance, standard DDA logic applies.
-    int mask = 0;
-    
-    if (boundaryDist.x <= boundaryDist.y && boundaryDist.x <= boundaryDist.z) {
-        mask = 0;
-        pos.x += step.x * nSteps.x;
-        t = boundaryDist.x;
-        sideDist.x = boundaryDist.x + deltaDist.x;
-    } else if (boundaryDist.y <= boundaryDist.z) {
-        mask = 1;
-        pos.y += step.y * nSteps.y;
-        t = boundaryDist.y;
-        sideDist.y = boundaryDist.y + deltaDist.y;
-    } else {
-        mask = 2;
-        pos.z += step.z * nSteps.z;
-        t = boundaryDist.z;
-        sideDist.z = boundaryDist.z + deltaDist.z;
+    float tx = sideDist.x + float(nx) * deltaDist.x;
+    float ty = sideDist.y + float(ny) * deltaDist.y;
+    float tz = sideDist.z + float(nz) * deltaDist.z;
+
+    if(tx <= ty && tx <= tz){
+        t = tx;
+        pos.x += step.x * (nx + 1);
+        sideDist.x = tx;
+        return 0;
+    }else if(ty <= tz){
+        t = ty;
+        pos.y += step.y * (ny + 1);
+        sideDist.y = ty;
+        return 1;
+    }else{
+        t = tz;
+        pos.z += step.z * (nz + 1);
+        sideDist.z = tz;
+        return 2;
     }
-    
-    return mask;
 }
 
+void StepSVO(
+    inout ivec3 mapPos,
+    inout vec3 sideDist,
+    vec3 deltaDist,
+    ivec3 step,
+    out int mask,
+    ivec3 localPos
+){
+    // distance to next SVO boundary along each axis
+    vec3 nextBoundary = vec3(
+        (step.x > 0) ? float((localPos.x & SVO_MASK) + 1) : float(localPos.x & SVO_MASK),
+        (step.y > 0) ? float((localPos.y & SVO_MASK) + 1) : float(localPos.y & SVO_MASK),
+        (step.z > 0) ? float((localPos.z & SVO_MASK) + 1) : float(localPos.z & SVO_MASK)
+    );
+
+    vec3 txyz = sideDist + nextBoundary * deltaDist;
+
+    if(txyz.x <= txyz.y && txyz.x <= txyz.z){
+        mask = 0;
+        sideDist.x = txyz.x;
+        mapPos.x += step.x * int(nextBoundary.x);
+    } else if(txyz.y <= txyz.z){
+        mask = 1;
+        sideDist.y = txyz.y;
+        mapPos.y += step.y * int(nextBoundary.y);
+    } else{
+        mask = 2;
+        sideDist.z = txyz.z;
+        mapPos.z += step.z * int(nextBoundary.z);
+    }
+}
 
 // ---------- main ----------
 void main(){
@@ -323,10 +372,10 @@ void main(){
     float t = 0.0;
     float hitDist = 0.0;
 
-for(int i=0; i<MAX_STEPS; i++){
-        // World Bounds Check
+    for(int i = 0; i < MAX_STEPS; i++){
+        // World bounds check
         if(any(lessThan(mapPos, ivec3(0))) ||
-           mapPos.x>=WORLD_VOX_X || mapPos.y>=WORLD_VOX_Y || mapPos.z>=WORLD_VOX_Z)
+           mapPos.x >= WORLD_VOX_X || mapPos.y >= WORLD_VOX_Y || mapPos.z >= WORLD_VOX_Z)
             break;
 
         int cx = mapPos.x >> CHUNK_PWR;
@@ -334,105 +383,126 @@ for(int i=0; i<MAX_STEPS; i++){
         int cz = mapPos.z >> CHUNK_PWR;
         int chunkIndex = cx*(WORLD_SIZE_Y*WORLD_SIZE_Z) + cz*WORLD_SIZE_Y + cy;
 
-        // --- SVO SKIP LOGIC ---
-        // 1. Get Local Coordinate (0..127)
         ivec3 localMapPos = mapPos & CHUNK_MASK;
-        
-        // 2. Align to Node (SVO) Grid (e.g. 0, 16, 32...)
-        ivec3 nodeBase = localMapPos & ~(16 - 1);
-        
-        // 3. Apply ZYX Swizzle to match your Voxel Texture Layout
-        ivec3 texCoord = ivec3(nodeBase.z, nodeBase.y, nodeBase.x);
 
-        uint nodeHeader = texelFetch(uVoxelTex[chunkIndex], texCoord, 0).r;
-
-        if(nodeHeader == 253u){
-            mask = SkipSVONode(mapPos, sideDist, deltaDist, step, 16, t);
-            continue; 
-        }
-        // ----------------------
-
-        /* Keep your empty chunk skip here if needed, 
-           but SVO skip is usually granular enough 
-        */
-
-        // Standard Voxel Fetch (Matches the ZYX swizzle above)
+        // Fetch voxel ID
         uint id = texelFetch(
             uVoxelTex[chunkIndex],
             ivec3(localMapPos.z, localMapPos.y, localMapPos.x),
-            0).r;
+            0
+        ).r;
 
-        if(id < 131u && id > 127u){
-        float tg;
-        vec3 gN;
-        float ga;
+        // Determine SVO size for this voxel
+        int svoSize = 1;
+        int svoMask = 0;
+        if(id == 253u) { svoSize = 16; svoMask = 15; }  // 16
+        else if(id == 252u){ svoSize = 32; svoMask = 31; } // 32
+        else if(id == 251u){ svoSize = 64; svoMask = 63; } // 64
+        else if(id == 255u){svoSize = 128; svoMask = 127; }
 
-        vec3 grassCol = vec3(0.0);
-        float accumAlpha = 0.0;
-        float firstHitT = 0.0;
+        
+        // ---------- Skip empty SVO region ----------
+        if(id == 253u || id == 252u || id == 251u || id == 255u){
+            int sx = (step.x > 0) ? (svoSize - (localMapPos.x & svoMask)) : ((localMapPos.x & svoMask) + 1);
+            int sy = (step.y > 0) ? (svoSize - (localMapPos.y & svoMask)) : ((localMapPos.y & svoMask) + 1);
+            int sz = (step.z > 0) ? (svoSize - (localMapPos.z & svoMask)) : ((localMapPos.z & svoMask) + 1);
 
-        // -------- PASS 1 --------
-        if(IntersectGrass(uCamPos, rd, mapPos, 1000.0, tg, gN, ga)){
-            vec3 hitPos = uCamPos + rd * tg;
-            vec3 localPos = clamp(hitPos - vec3(mapPos), 0.0, 1.0);
+            int steps = min(sx, min(sy, sz));
+            if(steps <= 0) steps = 1;
 
-            vec2 texUV = abs(gN.x) > 0.0
-                ? vec2(localPos.z, localPos.y)
-                : vec2(localPos.x, localPos.y);
+            // --- Single-step calculation ---
 
-            vec4 texSample = texture(uBlockTextures, vec3(texUV, float(id)));
+            // compute potential new side distances
+            float nx = sideDist.x + deltaDist.x * (steps - 1);
+            float ny = sideDist.y + deltaDist.y * (steps - 1);
+            float nz = sideDist.z + deltaDist.z * (steps - 1);
 
-            grassCol += texSample.rgb * texSample.a;
-            grassCol *= FOLIAGE_TINT;
-            accumAlpha += texSample.a;
-            firstHitT = tg;
+            // find minimal distance (where the loop would stop)
+            float tFinal = min(nx, min(ny, nz));
 
-            // -------- PASS 2 (only if not opaque) --------
-            if(texSample.a < 0.99){
-                float tg2;
-                vec3 gN2;
-                float ga2;
+            // compute how many steps along each axis
+            int stepX = int((tFinal - sideDist.x) / deltaDist.x);
+            int stepY = int((tFinal - sideDist.y) / deltaDist.y);
+            int stepZ = int((tFinal - sideDist.z) / deltaDist.z);
 
-                vec3 ro2 = uCamPos + rd * (tg + 0.002);
+            // update map position
+            mapPos.x += step.x * stepX;
+            mapPos.y += step.y * stepY;
+            mapPos.z += step.z * stepZ;
 
-                if(IntersectGrass(ro2, rd, mapPos, 1000.0, tg2, gN2, ga2)){
-                    vec3 hitPos2 = ro2 + rd * tg2;
-                    vec3 localPos2 = clamp(hitPos2 - vec3(mapPos), 0.0, 1.0);
+            // update side distances
+            sideDist.x += deltaDist.x * stepX;
+            sideDist.y += deltaDist.y * stepY;
+            sideDist.z += deltaDist.z * stepZ;
 
-                    vec2 texUV2 = abs(gN2.x) > 0.0
-                        ? vec2(localPos2.z, localPos2.y)
-                        : vec2(localPos2.x, localPos2.y);
+            // update mask based on final minimal side
+            if(sideDist.x <= sideDist.y && sideDist.x <= sideDist.z) mask = 0;
+            else if(sideDist.y <= sideDist.x && sideDist.y <= sideDist.z) mask = 1;
+            else mask = 2;
 
-                    vec4 texSample2 = texture(uBlockTextures, vec3(texUV2, float(id)));
+            // t is the minimal distance reached
+            t = tFinal;
 
-                    float a2 = texSample2.a * (1.0 - accumAlpha);
-                    grassCol += texSample2.rgb * a2;
-                    grassCol *= FOLIAGE_TINT;
-                    accumAlpha += a2;
+            i += steps;
+
+            //hit = true;
+            //hitDist = t;
+            //hitCol = vec3(1.0, 0 ,0);
+            //break;
+        }
+       
+
+        // ---------- Grass intersection ----------
+
+        bool isGrass = id == 128u || id == 129u || id == 130u;
+        if(isGrass && t < grassDistance){
+            float tg; vec3 gN; float ga;
+            vec3 grassCol = vec3(0.0);
+            float accumAlpha = 0.0;
+            float firstHitT = 0.0;
+
+            if(IntersectGrass(uCamPos, rd, mapPos, 1000.0, tg, gN, ga)){
+                vec3 hitPos = uCamPos + rd * tg;
+                vec3 localPos = clamp(hitPos - vec3(mapPos), 0.0, 1.0);
+                vec2 texUV = abs(gN.x) > 0.0 ? vec2(localPos.z, localPos.y) : vec2(localPos.x, localPos.y);
+                vec4 texSample = texture(uBlockTextures, vec3(texUV, float(id)));
+
+                grassCol += texSample.rgb * texSample.a * FOLIAGE_TINT;
+                accumAlpha += texSample.a;
+                firstHitT = tg;
+
+                // Second pass if not opaque
+                if(texSample.a < 0.99){
+                    float tg2; vec3 gN2; float ga2;
+                    vec3 ro2 = uCamPos + rd * (tg + 0.002);
+                    if(IntersectGrass(ro2, rd, mapPos, 1000.0, tg2, gN2, ga2)){
+                        vec3 hitPos2 = ro2 + rd * tg2;
+                        vec3 localPos2 = clamp(hitPos2 - vec3(mapPos), 0.0, 1.0);
+                        vec2 texUV2 = abs(gN2.x) > 0.0 ? vec2(localPos2.z, localPos2.y) : vec2(localPos2.x, localPos2.y);
+                        vec4 texSample2 = texture(uBlockTextures, vec3(texUV2, float(id)));
+                        float a2 = texSample2.a * (1.0 - accumAlpha);
+                        grassCol += texSample2.rgb * a2 * FOLIAGE_TINT;
+                        accumAlpha += a2;
+                    }
+                }
+
+                hitCol = mix(hitCol, grassCol, accumAlpha);
+                if(accumAlpha >= 0.99){
+                    hit = true;
+                    hitDist = firstHitT;
+                    normal = GRASS_LIGHT_NORMAL;
+                    break;
                 }
             }
-
-            hitCol = mix(hitCol, grassCol, accumAlpha);
-
-        if(accumAlpha >= 0.99){
-            hit = true;
-            hitDist = firstHitT;
-            normal = GRASS_LIGHT_NORMAL;
-            break;
         }
-        }
-        }
-        else if(id < 251u){
+        // ---------- Normal voxel ----------
+        else if(id < 251u && !isGrass){
             hit = true;
             hitDist = t - 0.0005;
 
             vec3 hitPos = uCamPos + rd * hitDist;
             vec3 local = fract(hitPos);
-
-            vec2 texUV;
-            if(mask==0)      texUV = local.zy;
-            else if(mask==1) texUV = local.xz;
-            else             texUV = local.xy;
+            vec2 texUV = (mask==0) ? local.zy : (mask==1) ? local.xz : local.xy;
 
             vec2 texSize = vec2(textureSize(uBlockTextures,0).xy);
             vec2 dx = dFdx(texUV * texSize);
@@ -440,26 +510,21 @@ for(int i=0; i<MAX_STEPS; i++){
             float mip = max(0.0, 0.5*log2(max(dot(dx,dx), dot(dy,dy))));
 
             hitCol = textureLod(uBlockTextures, vec3(texUV,float(id)), mip).rgb;
-            if (id == 2u)
-            {
-                hitCol *= FOLIAGE_TINT;
-            }
+            if(id == 2u) hitCol *= FOLIAGE_TINT;
 
-            if(mask==0) normal = vec3(-step.x,0,0);
-            else if(mask==1) normal = vec3(0,-step.y,0);
-            else normal = vec3(0,0,-step.z);
+            normal = (mask==0)?vec3(-step.x,0,0):(mask==1)?vec3(0,-step.y,0):vec3(0,0,-step.z);
             break;
         }
 
-        if(sideDist.x<sideDist.y){
-            if(sideDist.x<sideDist.z){ t=sideDist.x; sideDist.x+=deltaDist.x; mapPos.x+=step.x; mask=0; }
+        // Step to next voxel
+        if(sideDist.x < sideDist.y){
+            if(sideDist.x < sideDist.z){ t=sideDist.x; sideDist.x+=deltaDist.x; mapPos.x+=step.x; mask=0; }
             else{ t=sideDist.z; sideDist.z+=deltaDist.z; mapPos.z+=step.z; mask=2; }
         }else{
-            if(sideDist.y<sideDist.z){ t=sideDist.y; sideDist.y+=deltaDist.y; mapPos.y+=step.y; mask=1; }
+            if(sideDist.y < sideDist.z){ t=sideDist.y; sideDist.y+=deltaDist.y; mapPos.y+=step.y; mask=1; }
             else{ t=sideDist.z; sideDist.z+=deltaDist.z; mapPos.z+=step.z; mask=2; }
         }
     }
-
     vec3 sky = mix(vec3(0.72,0.89,1), vec3(0.67,0.84,1), rd.y*0.5+0.5);
     vec3 color = sky;
 

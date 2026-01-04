@@ -7,6 +7,8 @@ using OpenTK.Windowing.GraphicsLibraryFramework;
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.Drawing.Printing;
 
 namespace Voxel_Raytracer
@@ -33,6 +35,7 @@ namespace Voxel_Raytracer
     }
 
     // --- Step 1: Inherit from GameWindow ---
+
     public class Renderer : GameWindow
     {
 
@@ -41,6 +44,11 @@ namespace Voxel_Raytracer
         static int width => config.width;
         static int height => config.height;
         static int worldSize => config.worldSize;
+
+        int lowResFBO;
+        int lowResTex;
+        int lowW, lowH;
+        int renderScale = 2; // 2 = half res, 4 = quarter res
 
         static int chunkSize => config.chunkSize;
 
@@ -156,7 +164,7 @@ namespace Voxel_Raytracer
                 PixelInternalFormat.R8ui,     // 1 byte per voxel
                 size, size, size,
                 0,
-                PixelFormat.RedInteger,      // integer data
+                OpenTK.Graphics.OpenGL.PixelFormat.RedInteger,      // integer data
                 PixelType.UnsignedByte,
                 data
             );
@@ -197,6 +205,8 @@ namespace Voxel_Raytracer
 
             return data;
         }
+
+
 
         protected override void OnLoad()
         {
@@ -288,6 +298,72 @@ namespace Voxel_Raytracer
             });
 
 
+
+
+            /*
+            int size = chunkSize;
+            int imgW = worldSize * size;
+            int imgH = worldSize * size;
+
+            byte[] pixels_ = new byte[imgW * imgH * 4];
+
+            for (int i = 0; i < chunks.Length; i++)
+            {
+                Chunk chunk = chunks[i];
+                if (chunk == null) continue;
+
+                int cx = chunk.coords.X;
+                int cy = chunk.coords.Y;
+                int cz = chunk.coords.Z;
+
+                byte[] voxels = chunk.voxelData;
+
+                for (int z = 0; z < size; z++)
+                {
+                    for (int x = 0; x < size; x++)
+                    {
+                        int count = 0;
+
+                        for (int y = 0; y < size; y++)
+                        {
+                            // ✅ use the correct index formula from GenerateChunk
+                            int idx = z + size * (y + size * x);
+
+                            if (voxels[idx] != 254)
+                                count += 1;
+                        }
+
+                        int wx = cx * size + x;
+                        int wz = cz * size + z;
+
+                        int p = (wx + wz * imgW) * 4;
+                        int v = pixels_[p] + count;
+                        byte b = (byte)Math.Min(v, 255);
+
+                        pixels_[p + 0] = b;
+                        pixels_[p + 1] = b;
+                        pixels_[p + 2] = b;
+                        pixels_[p + 3] = 255;
+                    }
+                }
+            }
+
+            using Bitmap bmp = new Bitmap(imgW, imgH, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            BitmapData data = bmp.LockBits(
+                new Rectangle(0, 0, imgW, imgH),
+                ImageLockMode.WriteOnly,
+                bmp.PixelFormat
+            );
+
+            System.Runtime.InteropServices.Marshal.Copy(pixels_, 0, data.Scan0, pixels_.Length);
+            bmp.UnlockBits(data);
+
+            // flip vertically so +Z is up
+            bmp.RotateFlip(RotateFlipType.RotateNoneFlipY);
+
+            bmp.Save("world_debug.png", ImageFormat.Png);
+            */
+
             // Upload voxel chunks
             for (int c = 0; c < chunks.Length; c++)
                 chunks[c].textureId = UploadVoxelChunk(chunks[c].voxelData, chunkSize);
@@ -318,7 +394,7 @@ namespace Voxel_Raytracer
                 BLOCK_TEX_SIZE,
                 BLOCK_TEX_LAYERS,
                 0,
-                PixelFormat.Rgba,
+                OpenTK.Graphics.OpenGL.PixelFormat.Rgba,
                 PixelType.UnsignedByte,
                 IntPtr.Zero
             );
@@ -334,7 +410,7 @@ namespace Voxel_Raytracer
                     BLOCK_TEX_SIZE,
                     BLOCK_TEX_SIZE,
                     1,
-                    PixelFormat.Rgba,
+                    OpenTK.Graphics.OpenGL.PixelFormat.Rgba,
                     PixelType.UnsignedByte,
                     pixels
                 );
@@ -380,7 +456,7 @@ namespace Voxel_Raytracer
 
             vao = FullscreenTriangle();
 
-            Console.WriteLine("loaded");
+            Console.WriteLine("loaded shaders");
         }
 
 
@@ -474,7 +550,6 @@ namespace Voxel_Raytracer
             float lineSpacing = 30f; // Adjusted for font size 24
 
             int voxelCount = (int)((_chunks != null ? _chunks.Length : 1) * Math.Pow(chunkSize, 3));
-
 
             _textRenderer.RenderText(
                 $"fps: {fpsString} {args.Time * 1000:f1}ms",

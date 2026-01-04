@@ -74,7 +74,8 @@ namespace Voxel_Raytracer
 
             if (emptyChunk)
             {
-                result[0] = 255;
+                //result[0] = 255;
+                Array.Fill(result, (byte)255, 0, chunkSize * chunkSize * chunkSize);
 
                 return (result, outOfBounds);
             }
@@ -223,6 +224,20 @@ namespace Voxel_Raytracer
             return (result, outOfBounds);
         }
 
+        // shouldn't need to return anything since array is a reference type
+        private void FillRegionID(byte[] chunk, int size, int startX, int startY, int startZ, byte id)
+        {
+            for (int x = startX; x < startX + size; x++)
+                for (int y = startY; y < startY + size; y++)
+                    for (int z = startZ; z < startZ + size; z++)
+                    {
+                        int baseIndex = z + chunkSize * (y + chunkSize * x);
+                        chunk[baseIndex] = id;
+                    }
+
+            //return chunk;
+        }
+
         public byte[] GenerateSVO(byte[] result)
         {
             // -- SPARSE VOXEL OCTREES -- \\
@@ -251,8 +266,9 @@ namespace Voxel_Raytracer
                                         goto endOfL1;
                                 }
                         // code here runs if whole region was air
-                        int regionHeaderIndex = oz + chunkSize * (oy + chunkSize * ox);
-                        result[regionHeaderIndex] = 253;
+                        FillRegionID(result, l1, ox, oy, oz, 253);
+                        //int regionHeaderIndex = oz + chunkSize * (oy + chunkSize * ox);
+                        //result[regionHeaderIndex] = 253;
                     //
                     endOfL1:;
                     }
@@ -278,8 +294,9 @@ namespace Voxel_Raytracer
                                 }
 
                         // code here runs if 8 subregions were detected empty
-                        int regionHeaderIndex32 = oz + chunkSize * (oy + chunkSize * ox);
-                        result[regionHeaderIndex32] = 252;
+                        FillRegionID(result, l2, ox, oy, oz, 252);
+                        //int regionHeaderIndex32 = oz + chunkSize * (oy + chunkSize * ox);
+                        //result[regionHeaderIndex32] = 252;
 
                     endOfL2:;
                     }
@@ -308,8 +325,9 @@ namespace Voxel_Raytracer
                                 }
 
                         // code here runs if 8 32x32x32 regions were empty
-                        int regionHeaderIndex64 = oz + chunkSize * (oy + chunkSize * ox);
-                        result[regionHeaderIndex64] = 251; // marker for 64x64x64
+                        FillRegionID(result, l3, ox, oy, oz, 251);
+                        //int regionHeaderIndex64 = oz + chunkSize * (oy + chunkSize * ox);
+                        //result[regionHeaderIndex64] = 251; // marker for 64x64x64
 
                     endOfL3:;
                     }
