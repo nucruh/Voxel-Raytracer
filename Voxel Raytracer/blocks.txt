@@ -18,3 +18,20 @@
 253 - 16x16x16 empty region
 254 - air
 255 - 128x128x128 empty region (whole chunk)
+
+
+Chunk ID from position	
+cId = (cx * worldSize + cz) * worldSize + cy
+
+Chunk position from ID	
+cy = cId % worldSize
+cz = (cId / worldSize) % worldSize
+cx = cId / (worldSize * worldSize)
+
+Voxel ID from local block position	
+vId = vz + chunkSize * (vy + chunkSize * vx)
+
+Local block position from voxel ID	
+vx = vId / (chunkSize * chunkSize)
+vy = (vId / chunkSize) % chunkSize
+vz = vId % chunkSize

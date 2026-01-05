@@ -248,6 +248,14 @@ namespace Voxel_Raytracer
             if (result[0] == 255)
                 return result;
 
+            int i = 0;
+            foreach (byte b in result)
+            {
+                if (b == 253 || b == 252 || b == 251)
+                    result[i] = 254;
+                i++;
+            }
+
 
             // 16x16x16
             int l1 = 16;
