@@ -286,7 +286,7 @@ namespace Voxel_Raytracer
             {
                 var chunk = chunks[idx];
 
-                terrain.GenerateSVO(chunk.voxelData);
+                terrain.GenerateSVO(chunk.voxelData, false);
             });
 
 
@@ -431,6 +431,9 @@ namespace Voxel_Raytracer
             VoxelUtil.Raycast(camPos, cameraForward, _chunks, chunkSize, worldSize, 10, 5f, false, out hitPos, out hitNormal, out hitId, out vId, out cId);
 
             List<int> chunksUpdated = new List<int>();
+            List<List<int>> updatedVoxelPositions = new List<List<int>>();
+            while (updatedVoxelPositions.Count <= cId)
+                updatedVoxelPositions.Add(new List<int>());
 
             // break
             if (hitId > -1 && mouse.IsButtonDown(MouseButton.Left) && interactionTickBuildup == 0.25)
@@ -438,6 +441,7 @@ namespace Voxel_Raytracer
                 interactionTickBuildup = 0;
                 _chunks[cId].voxelData[vId] = 254;
 
+                updatedVoxelPositions[cId].Add(vId);
                 chunksUpdated.Add(cId);
             }
             
@@ -449,18 +453,37 @@ namespace Voxel_Raytracer
                 int vy = (int)((vId / chunkSize) % chunkSize + hitNormal.Y);
                 int vz = (int)(vId % chunkSize + hitNormal.Z);
 
-                int newVID = vId = vz + chunkSize * (vy + chunkSize * vx);
-                Console.WriteLine(newVID);
+                int newVID = vz + chunkSize * (vy + chunkSize * vx);
+                //Console.WriteLine(newVID);
 
                 _chunks[cId].voxelData[newVID] = 2;
+                updatedVoxelPositions[cId].Add(newVID);
                 chunksUpdated.Add(cId);
             }
 
+            Stopwatch debug = Stopwatch.StartNew();
+
             foreach (int listChunk in chunksUpdated)
             {
-                terrain.GenerateSVO(_chunks[cId].voxelData);
-                UpdateChunkTexture(cId);
+                Console.WriteLine("updating");
+                /*foreach (int vId1 in updatedVoxelPositions[listChunk])
+                {
+                    int vx = vId1 / (chunkSize * chunkSize);
+                    int vy = (vId1 / chunkSize) % chunkSize;
+                    int vz = vId1 % chunkSize;
+                    terrain.PartialSVOUpdate(_chunks[listChunk].voxelData, vx, vy, vz);
+                }
+                */
+                terrain.GenerateSVO(_chunks[listChunk].voxelData, true); // make this use update partial svo function
+                UpdateChunkTexture(listChunk);
             }
+
+            debug.Stop();
+            if (debug.ElapsedTicks > 10)
+            {
+                Console.WriteLine(debug.ElapsedTicks);
+            }
+
 
             if (input.IsKeyDown(Keys.Escape))
             {

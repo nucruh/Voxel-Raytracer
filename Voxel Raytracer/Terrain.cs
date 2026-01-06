@@ -237,7 +237,18 @@ namespace Voxel_Raytracer
             //return chunk;
         }
 
-        public byte[] GenerateSVO(byte[] result)
+        static readonly byte[] IsRegionMarker = new byte[256];
+
+        // lut
+        static Terrain()
+        {
+            IsRegionMarker[251] = 1;
+            IsRegionMarker[252] = 1;
+            IsRegionMarker[253] = 1;
+            IsRegionMarker[255] = 1;
+        }
+
+        public byte[] GenerateSVO(byte[] result, bool refillAir)
         {
             // -- SPARSE VOXEL OCTREES -- \\
             /* 
@@ -245,21 +256,38 @@ namespace Voxel_Raytracer
              * sx - subregion x
 
             */
-            if (result[0] == 255)
-                return result;
 
-            int i = 0;
-            foreach (byte b in result)
+            bool fullyEmpty = refillAir;
+
+            if (refillAir)
             {
-                if (b == 253 || b == 252 || b == 251)
-                    result[i] = 254;
-                i++;
+                int size = chunkSize * chunkSize * chunkSize;
+
+                for (int i = 0; i < size; i++)
+                {
+                    byte b = result[i];
+
+                    if (IsRegionMarker[b] != 0)
+                    {
+                        result[i] = 254;
+                    }
+                    else if (b != 254)
+                    {
+                        fullyEmpty = false;
+                    }
+                }
             }
 
+            if (fullyEmpty)
+            {
+                result[0] = 255;
+            }
 
-            // 16x16x16
+            if (result[0] == 255)
+                return result;
             int l1 = 16;
 
+            // 16x16x16
             for (int ox = 0; ox < chunkSize; ox += l1)
                 for (int oy = 0; oy < chunkSize; oy += l1)
                     for (int oz = 0; oz < chunkSize; oz += l1)
@@ -340,6 +368,82 @@ namespace Voxel_Raytracer
                     }
 
             return result;
+        }
+
+        public void PartialSVOUpdate(byte[] result, int vx, int vy, int vz)
+        {
+            // LEVEL 1: 16³
+            int l1 = 16;
+            int ox1 = (vx / l1) * l1;
+            int oy1 = (vy / l1) * l1;
+            int oz1 = (vz / l1) * l1;
+
+            bool allAir = true;
+            for (int x = ox1; x < ox1 + l1; x++)
+                for (int y = oy1; y < oy1 + l1; y++)
+                    for (int z = oz1; z < oz1 + l1; z++)
+                    {
+                        int idx = z + chunkSize * (y + chunkSize * x);
+                        if (result[idx] != 254) { allAir = false; break; }
+                    }
+
+            // ONLY update the **marker voxel**, not the whole region
+            int markerIndexL1 = oz1 + chunkSize * (oy1 + chunkSize * ox1);
+            result[markerIndexL1] = allAir ? (byte)253 : (byte)254;
+
+            // LEVEL 2: 32³
+            int l2 = 32;
+            int stepl2 = 16;
+            int ox2 = (vx / l2) * l2;
+            int oy2 = (vy / l2) * l2;
+            int oz2 = (vz / l2) * l2;
+
+            bool allEmptyL2 = true;
+            for (int sx = 0; sx < 2; sx++)
+                for (int sy = 0; sy < 2; sy++)
+                    for (int sz = 0; sz < 2; sz++)
+                    {
+                        int subX = ox2 + sx * stepl2;
+                        int subY = oy2 + sy * stepl2;
+                        int subZ = oz2 + sz * stepl2;
+
+                        int subMarker = subZ + chunkSize * (subY + chunkSize * subX);
+                        if (result[subMarker] != 253)
+                        {
+                            allEmptyL2 = false;
+                            break;
+                        }
+                    }
+
+            int markerIndexL2 = oz2 + chunkSize * (oy2 + chunkSize * ox2);
+            result[markerIndexL2] = allEmptyL2 ? (byte)252 : (byte)254;
+
+            // LEVEL 3: 64³
+            int l3 = 64;
+            int stepl3 = 32;
+            int ox3 = (vx / l3) * l3;
+            int oy3 = (vy / l3) * l3;
+            int oz3 = (vz / l3) * l3;
+
+            bool allEmptyL3 = true;
+            for (int sx = 0; sx < 2; sx++)
+                for (int sy = 0; sy < 2; sy++)
+                    for (int sz = 0; sz < 2; sz++)
+                    {
+                        int subX = ox3 + sx * stepl3;
+                        int subY = oy3 + sy * stepl3;
+                        int subZ = oz3 + sz * stepl3;
+
+                        int subMarker = subZ + chunkSize * (subY + chunkSize * subX);
+                        if (result[subMarker] != 252)
+                        {
+                            allEmptyL3 = false;
+                            break;
+                        }
+                    }
+
+            int markerIndexL3 = oz3 + chunkSize * (oy3 + chunkSize * ox3);
+            result[markerIndexL3] = allEmptyL3 ? (byte)251 : (byte)254;
         }
     }
 
