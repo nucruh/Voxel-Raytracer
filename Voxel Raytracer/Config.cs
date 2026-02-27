@@ -24,5 +24,8 @@ namespace Voxel_Raytracer
         public int worldSize = 4;
 
         private Config() { } // private constructor
+
+
+
     }
 }

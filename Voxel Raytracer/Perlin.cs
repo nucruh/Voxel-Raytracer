@@ -9,9 +9,9 @@ public class PerlinNoise
     double frequency = 1;
 
     double lacunarity = 2.1042;
-    double persistance = 0.5;
+    double persistance = 0.45;
 
-    int octaves = 4;
+    int octaves = 2;
 
     double precompMaxAmp = 0;
 
@@ -133,11 +133,11 @@ public class PerlinNoise
         double amplitude = this.amplitude;
         double frequency = this.frequency;
 
-        double sharpness = 30; // Options.sharpness
-        double reverseSharp = 30;
+        double sharpness = 15; // Options.sharpness
+        double reverseSharp = 15;
 
         // Terrain noise for blending
-        double terrainNoiseFreq = 0.001;
+        double terrainNoiseFreq = 0.005;
         double terrainNoise = Noise(x * terrainNoiseFreq, y * terrainNoiseFreq, z * terrainNoiseFreq);
         double blendFactor = terrainNoise;
 

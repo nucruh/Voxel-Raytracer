@@ -41,6 +41,7 @@ namespace Voxel_Raytracer
         static int chunkSize => config.chunkSize;
 
         static double generationTime = 0;
+        static double svoTime = 0;
 
         int blockTextureArray;
         const int BLOCK_TEX_SIZE = 16;
@@ -87,7 +88,7 @@ namespace Voxel_Raytracer
         {
             ClientSize = new Vector2i(width, height),
             Title = "Voxel Engine",
-            APIVersion = new Version(3, 3),
+            APIVersion = new Version(4, 3),
             Vsync = OpenTK.Windowing.Common.VSyncMode.Off,
             Location = new Vector2i(screenWidth / 2 - width / 2, screenHeight / 2 - height / 2),
             NumberOfSamples = 4,
@@ -216,6 +217,7 @@ namespace Voxel_Raytracer
         protected override void OnLoad()
         {
             base.OnLoad();
+
             CursorState = CursorState.Grabbed;
 
             _textRenderer = new GdiTextRenderer(width, height, "Monocraft", 20f);
@@ -243,7 +245,7 @@ namespace Voxel_Raytracer
                 {
                     coords = new Vector3i(x, y, z),
                     voxelData = resultVD,
-                    size = chunkSize
+                    size = chunkSize,
                 };
             });
 
@@ -282,6 +284,11 @@ namespace Voxel_Raytracer
                 }
             }
 
+            watch.Stop();
+            generationTime = watch.ElapsedMilliseconds;
+
+            watch.Start();
+
             Parallel.For(0, chunks.Length, idx =>
             {
                 var chunk = chunks[idx];
@@ -297,7 +304,7 @@ namespace Voxel_Raytracer
             _chunks = chunks;
 
             watch.Stop();
-            generationTime = watch.ElapsedMilliseconds;
+            svoTime = watch.ElapsedMilliseconds - generationTime;
 
             // build shader
             program = BuildShader();
@@ -466,15 +473,13 @@ namespace Voxel_Raytracer
             foreach (int listChunk in chunksUpdated)
             {
                 Console.WriteLine("updating");
-                /*foreach (int vId1 in updatedVoxelPositions[listChunk])
+                foreach (int vId1 in updatedVoxelPositions[listChunk])
                 {
                     int vx = vId1 / (chunkSize * chunkSize);
                     int vy = (vId1 / chunkSize) % chunkSize;
                     int vz = vId1 % chunkSize;
                     terrain.PartialSVOUpdate(_chunks[listChunk].voxelData, vx, vy, vz);
                 }
-                */
-                terrain.GenerateSVO(_chunks[listChunk].voxelData, true); // make this use update partial svo function
                 UpdateChunkTexture(listChunk);
             }
 
@@ -506,18 +511,43 @@ namespace Voxel_Raytracer
             );
         }
 
+        private const int MaxFrames = 300; // last 300 frames
+        private float[] frameTimes = new float[MaxFrames];
+        private int frameIndex = 0;
+        private int frameCountStored = 0;
+
+
         protected override void OnRenderFrame(FrameEventArgs args)
         {
 
-            frameCount++;
-            timeBuildup += args.Time;
+            // Store frame time in circular array
+            frameTimes[frameIndex] = (float)args.Time;
+            frameIndex = (frameIndex + 1) % MaxFrames;
+            frameCountStored = Math.Min(frameCountStored + 1, MaxFrames);
 
-            string fpsString = $"{Math.Round(frameCount / (timeBuildup > 0 ? timeBuildup : 1))} fps";
-            if (timeBuildup > 0.5)
-            {
-                timeBuildup = 0;
-                frameCount = 0;
-            }
+            // Copy to temp array for sorting
+            float[] sortedTimes = new float[frameCountStored];
+            Array.Copy(frameTimes, sortedTimes, frameCountStored);
+            Array.Sort(sortedTimes);
+
+            float avgTime = sortedTimes.Average();
+
+            int onePctIndex = (int)Math.Ceiling(0.99f * frameCountStored) - 1;
+            onePctIndex = Math.Clamp(onePctIndex, 0, frameCountStored - 1);
+            float low1Pct = sortedTimes[onePctIndex];
+
+            // 0.1% low = 0.1% slowest frames → near the very end
+            int pointOnePctIndex = (int)Math.Ceiling(0.999f * frameCountStored) - 1;
+            pointOnePctIndex = Math.Clamp(pointOnePctIndex, 0, frameCountStored - 1);
+            float low01Pct = sortedTimes[pointOnePctIndex];
+
+            string fpsString = string.Format(
+                "FPS avg: {0:F0}, 1% low: {1:F0}, 0.1% low: {2:F0}",
+                1f / avgTime,
+                1f / low1Pct,
+                1f / low01Pct
+            );
+
 
             GL.Disable(EnableCap.Blend);
             GL.Disable(EnableCap.DepthTest);
@@ -544,44 +574,48 @@ namespace Voxel_Raytracer
 
             GL.DrawArrays(PrimitiveType.Triangles, 0, 3);
 
-            float margin = 10f;
-            float lineSpacing = 30f; // Adjusted for font size 24
+            float marginScaleX = 10f / width;
+            float marginScaleY = 10f / height;
+            float lineSpacingScale = 30f / height;
+            float textSize = 1.0f;
 
             int voxelCount = (int)((_chunks != null ? _chunks.Length : 1) * Math.Pow(chunkSize, 3));
 
             _textRenderer.RenderText(
-                $"fps: {fpsString} {args.Time * 1000:f1}ms",
-                margin,
-                margin,
-                1.0f, 1.0f, 1.0f // White color
-            );
-
-            _textRenderer.RenderText(
-                $"world: {voxelCount / 10e5:f1}m voxels {worldSize}x{worldSize}x{worldSize} chunks",
-                margin,
-                margin + lineSpacing * 1,
-                1.0f, 1.0f, 1.0f // White color
-            );
-
-            _textRenderer.RenderText(
-                $"generated in: {generationTime:f1}ms with an average of {(generationTime) / (_chunks != null ? _chunks.Length : 1):f2}ms per chunk",
-                margin,
-                margin + lineSpacing * 2,
-                1.0f, 1.0f, 1.0f
-            );
-
-            _textRenderer.RenderText(
-                $"system: {width}x{height}, {Environment.ProcessorCount} processors, {(voxelCount * 1) / 1024 / 1024}MiB for voxels",
-                margin,
-                margin + lineSpacing * 3,
-                1.0f, 1.0f, 1.0f
-            );
+                $"{fpsString}\n" +
+                $"world: {voxelCount / 10e5:f1}m voxels {worldSize}x{worldSize}x{worldSize} chunks\n"+
+                $"Terrain generated in: {generationTime:f1}ms with an average of {(generationTime) / (_chunks != null ? _chunks.Length : 1):f2}ms per chunk\n" +
+                $"SVO and chunk upload in: {svoTime:f1}ms with an average of {(svoTime) / (_chunks != null ? _chunks.Length : 1):f2}ms per chunk\n" +
+                $"system: {width}x{height}, {Environment.ProcessorCount} processors, {(voxelCount * 1) / 1024 / 1024}MiB for voxels\n",
+                marginScaleX,
+                marginScaleY,
+                240, 240, 240,
+                textSize
+                );
 
             _textRenderer.RenderText(
                 $"pos: {Math.Round(camPos.X, 2)}, {Math.Round(camPos.Y, 2)}, {Math.Round(camPos.Z, 2)}",
-                margin,
-                margin + lineSpacing * 5,
-                1.0f, 0.7f, 0.2f // Orange color
+                marginScaleX,
+                marginScaleY + lineSpacingScale * 6,
+                240, 180, 50,
+                textSize
+            );
+
+            _textRenderer.RenderText(
+                "°",
+                0.5f,
+                0.5f,
+                240, 240, 240,
+                0.6f
+            );
+
+            // Example for bottom-right HUD element (normalized coordinates)
+            _textRenderer.RenderText(
+                $"[1] - Grass Block",
+                10f / width,
+                0.98f - _textRenderer.GetHeight(1.0f) / height,
+                255, 255, 255,
+                textSize
             );
 
             SwapBuffers();

@@ -4,6 +4,7 @@ using System.Drawing; // GDI+ Namespace
 using System.Drawing.Imaging;
 using System;
 using System.IO;
+using PixelFormat = System.Drawing.Imaging.PixelFormat;
 
 // This replaces the complex SharpFont TextRenderer
 public class GdiTextRenderer : IDisposable
@@ -27,7 +28,7 @@ public class GdiTextRenderer : IDisposable
         // Use a standard font file.
         // NOTE: This relies on the font being installed on the system OR finding the .ttf file
         // For simplicity, we use the font family name.
-        _font = new System.Drawing.Font(fontName, fontSize, System.Drawing.FontStyle.Regular);
+        _font = new System.Drawing.Font(fontName, fontSize, System.Drawing.FontStyle.Bold);
 
         // 1. Setup Quad Shaders (same as the previous text.vert/text.frag)
         _program = LoadTextShader("shaders/text.vert", "shaders/text.frag");
@@ -96,54 +97,65 @@ public class GdiTextRenderer : IDisposable
             return;
         }
 
-        // Use Graphics.MeasureString to determine the size of the required bitmap
-        // Use a high-quality Bitmap (32bpp) for smooth text and transparency
-        using var tempBitmap = new Bitmap(1, 1);
-        using var tempGraphics = Graphics.FromImage(tempBitmap);
-
-        // TextFormatFlags.NoPadding helps get a tight bound.
-#pragma warning disable CA1416 // Validate platform compatibility
-        SizeF measuredSize = tempGraphics.MeasureString(text, _font, new System.Drawing.PointF(0, 0), StringFormat.GenericTypographic);
-#pragma warning restore CA1416 // Validate platform compatibility
-
-        // Add a small padding for safety
-        int textureWidth = (int)Math.Ceiling(measuredSize.Width) + 20;
-        int textureHeight = (int)Math.Ceiling(measuredSize.Height) + 4;
-
-        // Only regenerate texture if size or text content changes
-        if (text == _lastText && _lastSize.Width == textureWidth && _lastSize.Height == textureHeight)
-        {
-            return;
-        }
+        // Only regenerate texture if text changed
+        if (text == _lastText) return;
         _lastText = text;
-        _lastSize = new Size(textureWidth, textureHeight);
 
-        // 1. Draw text onto the Bitmap
-        using var bitmap = new Bitmap(textureWidth, textureHeight, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        string[] lines = text.Split('\n');
+
+        // Measure the width and height of each line
+        int textureWidth = 0;
+        int textureHeight = 0;
+
+        using var measureBmp = new Bitmap(1, 1);
+        using var g = Graphics.FromImage(measureBmp);
+
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+
+        SizeF[] lineSizes = new SizeF[lines.Length];
+        for (int i = 0; i < lines.Length; i++)
+        {
+            lineSizes[i] = g.MeasureString(lines[i], _font, PointF.Empty, StringFormat.GenericTypographic);
+            textureWidth = Math.Max(textureWidth, (int)Math.Ceiling(lineSizes[i].Width));
+            textureHeight += (int)Math.Ceiling(lineSizes[i].Height);
+        }
+
+        // Add some padding
+        textureWidth += 20;
+        textureHeight += 4;
+
+        _textWidth = textureWidth;
+        _textHeight = textureHeight;
+
+        // Draw all lines into a single bitmap
+        using var bitmap = new Bitmap(textureWidth, textureHeight, PixelFormat.Format32bppArgb);
         using var graphics = Graphics.FromImage(bitmap);
 
+        graphics.Clear(Color.Transparent);
         graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
         graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
-        graphics.Clear(System.Drawing.Color.Transparent); // Make sure the background is transparent
 
-        // Draw the text
-        graphics.DrawString(text, _font, System.Drawing.Brushes.White, new PointF(2, 2)); // Draw with white color onto the bitmap
-
-        // 2. Upload to OpenGL
-        if (_fontTexture == 0)
+        float y = 0;
+        foreach (string line in lines)
         {
-            _fontTexture = GL.GenTexture();
+            graphics.DrawString(line, _font, Brushes.White, new PointF(2, y));
+            y += g.MeasureString(line, _font, PointF.Empty, StringFormat.GenericTypographic).Height;
         }
+
+        // Flip vertically for OpenGL
+        bitmap.RotateFlip(RotateFlipType.RotateNoneFlipY);
+
+        // Upload to OpenGL
+        if (_fontTexture == 0)
+            _fontTexture = GL.GenTexture();
 
         GL.BindTexture(TextureTarget.Texture2D, _fontTexture);
 
-        // Flip the image vertically for OpenGL compatibility
-        bitmap.RotateFlip(RotateFlipType.RotateNoneFlipY);
-
         BitmapData data = bitmap.LockBits(
-            new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height),
+            new Rectangle(0, 0, bitmap.Width, bitmap.Height),
             ImageLockMode.ReadOnly,
-            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            PixelFormat.Format32bppArgb);
 
         GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba,
             bitmap.Width, bitmap.Height, 0, OpenTK.Graphics.OpenGL.PixelFormat.Bgra,
@@ -151,85 +163,105 @@ public class GdiTextRenderer : IDisposable
 
         bitmap.UnlockBits(data);
 
-        // Set texture parameters
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
 
-        _textWidth = textureWidth;
-        _textHeight = textureHeight;
+        GL.BindTexture(TextureTarget.Texture2D, 0);
     }
 
-    public void RenderText(string text, float x, float y, float colorR, float colorG, float colorB)
-    {
-        GenerateTextTexture(text);
 
+    public float GetHeight(float sizeScale)
+    {
+        string text = "0";
+
+        if (string.IsNullOrEmpty(text))
+            return 0f;
+
+        // Temporary bitmap/graphics for measuring
+        using var bmp = new Bitmap(1, 1);
+        using var g = Graphics.FromImage(bmp);
+
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+
+        // Measure string
+        SizeF measuredSize = g.MeasureString(text, _font, new PointF(0, 0), StringFormat.GenericTypographic);
+
+        // Scale by sizeScale
+        return measuredSize.Height * sizeScale;
+    }
+
+    public void RenderText(string text, float xScale, float yScale, float colorR, float colorG, float colorB, float sizeScale = 1f)
+    {
+        colorR = Math.Clamp(colorR / 255.0f, 0f, 1f);
+        colorG = Math.Clamp(colorG / 255.0f, 0f, 1f);
+        colorB = Math.Clamp(colorB / 255.0f, 0f, 1f);
+
+        int lines = text.Split('\n').Length - 1;
+        lines = lines == 0 ? 1 : lines; // avoid / 0
+
+        GenerateTextTexture(text);
         if (_fontTexture == 0) return;
 
-        // Vertices for a single quad dynamically sized to the text texture
-        // Position: (x, y) coordinates for top-left corner
-        // Size: (_textWidth, _textHeight)
+        float scaledWidth = _textWidth * sizeScale;
+        float scaledHeight = _textHeight * sizeScale;
 
+        float x = xScale * _windowWidth;
+        float y = yScale * _windowHeight;
+
+        float shadowOffset = scaledHeight / lines * 0.06f; // smaller, proportional
+
+        // Render shadow (full multi-line)
+        RenderTextQuad(x + shadowOffset, y + shadowOffset, scaledWidth, scaledHeight, 0f, 0f, 0f, 0.5f);
+
+        // Render main text
+        RenderTextQuad(x, y, scaledWidth, scaledHeight, colorR, colorG, colorB, 1f);
+    }
+    private void RenderTextQuad(float x, float y, float width, float height, float r, float g, float b, float a)
+    {
         float x0 = x;
         float y0 = y;
-        float x1 = x + _textWidth;
-        float y1 = y + _textHeight;
+        float x1 = x + width;
+        float y1 = y + height;
 
-        // Quad vertices (Position and UVs)
         float[] vertices = new float[]
         {
-            // Position (2f), UV (2f)
-            x0, y0, 0f, 1f, // Top-Left
-            x0, y1, 0f, 0f, // Bottom-Left
-            x1, y1, 1f, 0f, // Bottom-Right
+        x0, y0, 0f, 1f,
+        x0, y1, 0f, 0f,
+        x1, y1, 1f, 0f,
 
-            x1, y1, 1f, 0f, // Bottom-Right
-            x1, y0, 1f, 1f, // Top-Right
-            x0, y0, 0f, 1f  // Top-Left
+        x1, y1, 1f, 0f,
+        x1, y0, 1f, 1f,
+        x0, y0, 0f, 1f
         };
 
         GL.Enable(EnableCap.Blend);
         GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         GL.Disable(EnableCap.DepthTest);
 
-        // Upload and Draw
         GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
         GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * sizeof(float), vertices, BufferUsageHint.StreamDraw);
-
-        GL.Enable(EnableCap.Blend);
-        GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-        GL.Disable(EnableCap.DepthTest);
 
         GL.UseProgram(_program);
         GL.BindVertexArray(_vao);
 
-        // Set uniform color (uses white brush in GDI+ but we tint it here)
         int colorLoc = GL.GetUniformLocation(_program, "uColor");
-        GL.Uniform4(colorLoc, colorR, colorG, colorB, 1.0f);
+        GL.Uniform4(colorLoc, r, g, b, a);
 
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, _fontTexture);
 
         GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
 
-        // Cleanup / Reset state
-        GL.Disable(EnableCap.Blend);
-        GL.Enable(EnableCap.DepthTest);
         GL.BindVertexArray(0);
         GL.BindTexture(TextureTarget.Texture2D, 0);
-
-        // --- Cleanup / Reset State ---
         GL.UseProgram(0);
-        GL.BindVertexArray(0);
 
-        // Unbind the text texture from Unit 0 (CRITICAL)
-        GL.ActiveTexture(TextureUnit.Texture0);
-        GL.BindTexture(TextureTarget.Texture2D, 0);
-
+        GL.Enable(EnableCap.DepthTest);
         GL.Disable(EnableCap.Blend);
     }
-
     public void Dispose()
     {
         if (_fontTexture != 0) GL.DeleteTexture(_fontTexture);

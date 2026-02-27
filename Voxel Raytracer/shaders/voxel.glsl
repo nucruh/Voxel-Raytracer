@@ -14,15 +14,20 @@ uniform ivec3 uVoxelDim;
 
 uniform sampler2DArray uBlockTextures;
 
-float fogEnd = 200.0;
+float fogEnd = 300.0;
 float fogStart = 50.0;
 float shadowDistance = 150.0;
-float grassDistance = 100.0;
+float grassDistance = 200.0;
 
 const int CHUNK_SIZE = 128;
 const int CHUNK_PWR  = 7;
 const int CHUNK_MASK = CHUNK_SIZE - 1;
 
+const float CLOUD_BOTTOM = 700.0;
+const float CLOUD_TOP    = 900.0;
+const int CLOUD_STEPS = 18;
+
+const float CLOUD_BLOCK_SIZE = (CLOUD_TOP - CLOUD_BOTTOM) / float(CLOUD_STEPS);
 
 const int SVO_SIZE = 16;
 const int SVO_PWR  = 4;
@@ -38,9 +43,9 @@ const int WORLD_VOX_Y = WORLD_SIZE_Y * CHUNK_SIZE;
 const int WORLD_VOX_Z = WORLD_SIZE_Z * CHUNK_SIZE;
 
 const int GODRAY_STEPS = 16;
-const float GODRAY_DENSITY = 0.025;
-const float GODRAY_DECAY = 0.99;
-const float GODRAY_INTENSITY = 1.2;
+const float GODRAY_DENSITY = 0.015;
+const float GODRAY_DECAY = 0.9;
+const float GODRAY_INTENSITY = 5.2;
 
 const int MAX_STEPS = 300;
 const vec3 SUN_DIR = normalize(vec3(1.0, -1.0, 0.5));
@@ -199,32 +204,55 @@ bool TraceShadow(vec3 startPos){
         ).r;
 
         // Check SVO sizes
-        int svoSize = 1;
+       int svoSize = 1;
         int svoMask = 0;
-        if(id == 253u){ svoSize = 16; svoMask = 15; }
-        else if(id == 252u){ svoSize = 32; svoMask = 31; }
-        else if(id == 251u){ svoSize = 64; svoMask = 63; }
+        if(id == 253u) { svoSize = 16; svoMask = 15; }  // 16
+        else if(id == 252u){ svoSize = 32; svoMask = 31; } // 32
+        else if(id == 251u){ svoSize = 64; svoMask = 63; } // 64
+        else if(id == 255u){svoSize = 128; svoMask = 127; } // 128
 
-        // Skip empty SVO region
-        if(id == 253u || id == 252u || id == 251u){
-            int sx = (step.x > 0) ? (svoSize - (mapPos.x & svoMask)) : ((mapPos.x & svoMask) + 1);
-            int sy = (step.y > 0) ? (svoSize - (mapPos.y & svoMask)) : ((mapPos.y & svoMask) + 1);
-            int sz = (step.z > 0) ? (svoSize - (mapPos.z & svoMask)) : ((mapPos.z & svoMask) + 1);
+        
+        if(svoMask != 0)
+        {
+            ivec3 regionBase = mapPos & ~svoMask;
+            vec3 boxMin = vec3(regionBase);
+            vec3 boxMax = boxMin + vec3(svoSize);
 
-            int steps = min(sx, min(sy, sz));
-            if(steps <= 0) steps = 1;
+            // Ray-box intersection
+            vec3 invDir = 1.0 / rd;
+            vec3 t0 = (boxMin - uCamPos) * invDir;
+            vec3 t1 = (boxMax - uCamPos) * invDir;
 
-            for(int k=0;k<steps;k++){
-                if(sideDist.x < sideDist.y){
-                    if(sideDist.x < sideDist.z){ t=sideDist.x; sideDist.x+=deltaDist.x; mapPos.x+=step.x; }
-                    else{ t=sideDist.z; sideDist.z+=deltaDist.z; mapPos.z+=step.z; }
-                }else{
-                    if(sideDist.y < sideDist.z){ t=sideDist.y; sideDist.y+=deltaDist.y; mapPos.y+=step.y; }
-                    else{ t=sideDist.z; sideDist.z+=deltaDist.z; mapPos.z+=step.z; }
-                }
-            }
-            continue;
+            vec3 tsmaller = min(t0, t1);
+            vec3 tbigger  = max(t0, t1);
+
+            float tEnter = max(max(tsmaller.x, tsmaller.y), tsmaller.z);
+            float tExit  = min(min(tbigger.x, tbigger.y), tbigger.z);
+
+            if(tExit <= tEnter) continue;
+
+            // Use a very small epsilon to nudge into the next voxel
+            float epsilon = 0.001; 
+            t = tExit + epsilon; 
+
+            // Sync the mapPos and sideDist to the NEW position after the jump
+            vec3 jumpPos = uCamPos + rd * t;
+            mapPos = ivec3(floor(jumpPos));
+
+            // IMPORTANT: You must fully refresh sideDist here
+            sideDist = (vec3(step) * (vec3(mapPos) - uCamPos + 0.5 + vec3(step) * 0.5)) * deltaDist;
+    
+            // Also re-calculate sideDist based on the standard DDA formula 
+            // to ensure the next loop iteration doesn't use old data
+            sideDist = vec3(
+                ((rd.x < 0.0) ? (jumpPos.x - float(mapPos.x)) : (float(mapPos.x + 1.0) - jumpPos.x)) * deltaDist.x,
+                ((rd.y < 0.0) ? (jumpPos.y - float(mapPos.y)) : (float(mapPos.y + 1.0) - jumpPos.y)) * deltaDist.y,
+                ((rd.z < 0.0) ? (jumpPos.z - float(mapPos.z)) : (float(mapPos.z + 1.0) - jumpPos.z)) * deltaDist.z
+            );
+
+            continue; 
         }
+
 
         // Hit solid voxel
         if(id < 251u && (id < 128u || id > 130u)) return true;
@@ -240,6 +268,68 @@ bool TraceShadow(vec3 startPos){
     }
 
     return false;
+}
+
+// ---------- 3D noise & fbm ----------
+float hash31(vec3 p){
+    p = fract(p * vec3(123.34, 456.21, 789.56));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y * p.z);
+}
+
+float noise3(vec3 p){
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f*f*(3.0 - 2.0*f);
+
+    float n000 = hash31(i + vec3(0.0,0.0,0.0));
+    float n100 = hash31(i + vec3(1.0,0.0,0.0));
+    float n010 = hash31(i + vec3(0.0,1.0,0.0));
+    float n110 = hash31(i + vec3(1.0,1.0,0.0));
+    float n001 = hash31(i + vec3(0.0,0.0,1.0));
+    float n101 = hash31(i + vec3(1.0,0.0,1.0));
+    float n011 = hash31(i + vec3(0.0,1.0,1.0));
+    float n111 = hash31(i + vec3(1.0,1.0,1.0));
+
+    float nx00 = mix(n000, n100, f.x);
+    float nx10 = mix(n010, n110, f.x);
+    float nx01 = mix(n001, n101, f.x);
+    float nx11 = mix(n011, n111, f.x);
+
+    float nxy0 = mix(nx00, nx10, f.y);
+    float nxy1 = mix(nx01, nx11, f.y);
+
+    return mix(nxy0, nxy1, f.z);
+}
+
+float fbm3(vec3 p){
+    float v = 0.0;
+    float a = 0.5;
+    for(int i=0;i<3;i++){
+        v += noise3(p) * a;
+        p *= 2.0;
+        a *= 0.5;
+    }
+    return v;
+}
+
+// ---------- volumetric cloud density ----------
+float SampleCloudDensity(vec3 p)
+{
+    float blockSize = CLOUD_BLOCK_SIZE;
+    vec3 blockPos = floor(p / blockSize);
+    vec3 localPos = fract(p / blockSize); 
+
+    // 3D FBM for density
+    vec3 noisePos = blockPos * 0.04 + iTime * 0.02;
+    float density = fbm3(noisePos);
+
+    density = step(0.5, density);
+
+    float yFactor = smoothstep(CLOUD_BOTTOM, CLOUD_BOTTOM + blockSize, p.y) *
+                    smoothstep(CLOUD_TOP, CLOUD_TOP - blockSize, p.y);
+
+    return density * yFactor;
 }
 
 // ---------- main ----------
@@ -292,64 +382,54 @@ void main(){
         if(id == 253u) { svoSize = 16; svoMask = 15; }  // 16
         else if(id == 252u){ svoSize = 32; svoMask = 31; } // 32
         else if(id == 251u){ svoSize = 64; svoMask = 63; } // 64
-        else if(id == 255u){svoSize = 128; svoMask = 127; }
+        else if(id == 255u){svoSize = 128; svoMask = 127; } // 128
 
         
-        // ---------- Skip empty SVO region ----------
-        if(id == 253u || id == 252u || id == 251u || id == 255u){
-            int sx = (step.x > 0) ? (svoSize - (localMapPos.x & svoMask)) : ((localMapPos.x & svoMask) + 1);
-            int sy = (step.y > 0) ? (svoSize - (localMapPos.y & svoMask)) : ((localMapPos.y & svoMask) + 1);
-            int sz = (step.z > 0) ? (svoSize - (localMapPos.z & svoMask)) : ((localMapPos.z & svoMask) + 1);
+        if(svoMask != 0)
+        {
+            ivec3 regionBase = mapPos & ~svoMask;
+            vec3 boxMin = vec3(regionBase);
+            vec3 boxMax = boxMin + vec3(svoSize);
 
-            int steps = min(sx, min(sy, sz));
-            if(steps <= 0) steps = 1;
+            // Ray-box intersection
+            vec3 invDir = 1.0 / rd;
+            vec3 t0 = (boxMin - uCamPos) * invDir;
+            vec3 t1 = (boxMax - uCamPos) * invDir;
 
-            // --- Single-step calculation ---
+            vec3 tsmaller = min(t0, t1);
+            vec3 tbigger  = max(t0, t1);
 
-            // compute potential new side distances
-            float nx = sideDist.x + deltaDist.x * (steps - 1);
-            float ny = sideDist.y + deltaDist.y * (steps - 1);
-            float nz = sideDist.z + deltaDist.z * (steps - 1);
+            float tEnter = max(max(tsmaller.x, tsmaller.y), tsmaller.z);
+            float tExit  = min(min(tbigger.x, tbigger.y), tbigger.z);
 
-            // find minimal distance (where the loop would stop)
-            float tFinal = min(nx, min(ny, nz));
+            if(tExit <= tEnter) continue;
 
-            // compute how many steps along each axis
-            int stepX = int((tFinal - sideDist.x) / deltaDist.x);
-            int stepY = int((tFinal - sideDist.y) / deltaDist.y);
-            int stepZ = int((tFinal - sideDist.z) / deltaDist.z);
+            // Use a very small epsilon to nudge into the next voxel
+            float epsilon = 0.001; 
+            t = tExit + epsilon; 
 
-            // update map position
-            mapPos.x += step.x * stepX;
-            mapPos.y += step.y * stepY;
-            mapPos.z += step.z * stepZ;
+            // Sync the mapPos and sideDist to the NEW position after the jump
+            vec3 jumpPos = uCamPos + rd * t;
+            mapPos = ivec3(floor(jumpPos));
 
-            // update side distances
-            sideDist.x += deltaDist.x * stepX;
-            sideDist.y += deltaDist.y * stepY;
-            sideDist.z += deltaDist.z * stepZ;
+            // IMPORTANT: You must fully refresh sideDist here
+            sideDist = (vec3(step) * (vec3(mapPos) - uCamPos + 0.5 + vec3(step) * 0.5)) * deltaDist;
+    
+            // Also re-calculate sideDist based on the standard DDA formula 
+            // to ensure the next loop iteration doesn't use old data
+            sideDist = vec3(
+                ((rd.x < 0.0) ? (jumpPos.x - float(mapPos.x)) : (float(mapPos.x + 1.0) - jumpPos.x)) * deltaDist.x,
+                ((rd.y < 0.0) ? (jumpPos.y - float(mapPos.y)) : (float(mapPos.y + 1.0) - jumpPos.y)) * deltaDist.y,
+                ((rd.z < 0.0) ? (jumpPos.z - float(mapPos.z)) : (float(mapPos.z + 1.0) - jumpPos.z)) * deltaDist.z
+            );
 
-            // update mask based on final minimal side
-            if(sideDist.x <= sideDist.y && sideDist.x <= sideDist.z) mask = 0;
-            else if(sideDist.y <= sideDist.x && sideDist.y <= sideDist.z) mask = 1;
-            else mask = 2;
-
-            // t is the minimal distance reached
-            t = tFinal;
-
-            i += steps;
-
-            //hit = true;
-            //hitDist = t;
-            //hitCol = vec3(1.0, 0 ,0);
-            //break;
+            continue; 
         }
-       
 
         // ---------- Grass intersection ----------
 
         bool isGrass = id == 128u || id == 129u || id == 130u;
-        if(isGrass && t < grassDistance){
+        if(isGrass && (distance(vec3(mapPos), uCamPos) < grassDistance)){
             float tg; vec3 gN; float ga;
             vec3 grassCol = vec3(0.0);
             float accumAlpha = 0.0;
@@ -389,27 +469,48 @@ void main(){
                 }
             }
         }
-        // ---------- Normal voxel ----------
-        else if(id < 251u && !isGrass){
+        else if(id < 251u && !isGrass) {
             hit = true;
-            hitDist = t - 0.0005;
+    
+            // 1. Get the normal FIRST so we can use it for Mip/UV calculations
+            normal = GetBlockNormal(mask, step);
 
-            vec3 hitPos = uCamPos + rd * hitDist;
+            // 2. Stable hit distance calculation
+            // Instead of using the 't' accumulator, calculate distance to the hit face plane.
+            // This prevents "shimmering" or "stair-stepping" in the texture LOD.
+            if (mask == 0)      hitDist = (float(mapPos.x + (step.x <= 0 ? 1 : 0)) - uCamPos.x) / rd.x;
+            else if (mask == 1) hitDist = (float(mapPos.y + (step.y <= 0 ? 1 : 0)) - uCamPos.y) / rd.y;
+            else                hitDist = (float(mapPos.z + (step.z <= 0 ? 1 : 0)) - uCamPos.z) / rd.z;
+
+            vec3 hitPos = uCamPos + rd * (hitDist);
             vec3 local = fract(hitPos);
             vec2 texUV = (mask==0) ? local.zy : (mask==1) ? local.xz : local.xy;
 
-            vec2 texSize = vec2(textureSize(uBlockTextures,0).xy);
-            vec2 dx = dFdx(texUV * texSize);
-            vec2 dy = dFdy(texUV * texSize);
-            float mip = max(0.0, 0.5*log2(max(dot(dx,dx), dot(dy,dy))));
+            // 3. Analytically calculate Mip Level
+            vec2 texSize = vec2(textureSize(uBlockTextures, 0).xy);
+    
+            // TUNING: Increase 'sharpness' if it's too blurry, decrease if aliasing.
+            // 1.5 to 2.0 is usually the sweet spot for voxel engines.
+            float sharpness = 2.0; 
+            float K = (1.0 / iResolution.y) * sharpness; 
 
-            hitCol = textureLod(uBlockTextures, vec3(texUV,float(id)), mip).rgb;
+            // Calculate footprint: how many world-units a pixel covers
+            // We use max() to prevent division by zero on glancing angles
+            float angleCorrection = max(abs(dot(rd, normal)), 0.001);
+            float footprint = (hitDist * K) / angleCorrection;
+
+            // Scale footprint by texture resolution (e.g., 16x16) to find texel coverage
+            float mip = log2(footprint * texSize.x);
+
+            // Clamp to valid range
+            float maxMip = float(textureQueryLevels(uBlockTextures) - 1);
+            mip = clamp(mip, 0.0, maxMip);
+
+            hitCol = textureLod(uBlockTextures, vec3(texUV, float(id)), mip).rgb;
             if(id == 2u) hitCol *= FOLIAGE_TINT;
 
-            normal = (mask==0)?vec3(-step.x,0,0):(mask==1)?vec3(0,-step.y,0):vec3(0,0,-step.z);
             break;
         }
-
         // Step to next voxel
         if(sideDist.x < sideDist.y){
             if(sideDist.x < sideDist.z){ t=sideDist.x; sideDist.x+=deltaDist.x; mapPos.x+=step.x; mask=0; }
@@ -419,8 +520,12 @@ void main(){
             else{ t=sideDist.z; sideDist.z+=deltaDist.z; mapPos.z+=step.z; mask=2; }
         }
     }
-    vec3 sky = mix(vec3(0.72,0.89,1), vec3(0.67,0.84,1), rd.y*0.5+0.5);
+
+    // 1st = bottom, 2nd = top
+    vec3 sky = mix(vec3(0.5235, 0.6490, 0.7980), vec3(0.3490, 0.5098, 0.6941), rd.y*0.7+0.5);
     vec3 color = sky;
+
+    float fog;
 
     if(hit){
         vec3 hitPos = uCamPos + rd*hitDist;
@@ -438,11 +543,59 @@ void main(){
 
         color = hitCol * (0.6 + diff*shadow); //* FOLIAGE_TINT;
 
-        float fog = clamp(exp(-(hitDist - fogEnd) * 0.05), 0.0, 1.0);
+        fog = clamp(exp(-(hitDist - fogEnd) * 0.05), 0.0, 1.0);
 
         fog *= smoothstep(0.0, 1.0, (hitDist - fogEnd) / (fogStart - fogEnd));
         color = mix(sky,color,fog);
+
     }
+
+    float cloudAccum = 0.0;
+    float cloudTrans = 1.0;
+
+    if(rd.y > 0.0){
+
+        float t0 = (CLOUD_BOTTOM - uCamPos.y) / rd.y;
+        float t1 = (CLOUD_TOP    - uCamPos.y) / rd.y;
+
+        if(t1 > 0.0){
+
+            float start = max(t0, 0.0);
+            float end   = max(t1, 0.0);
+
+            // ---- DEPTH CLIP AGAINST WORLD ----
+            float maxCloudDist = hit ? hitDist : MAX_STEPS * 5;
+            end = min(end, maxCloudDist);
+
+            if(end > start){
+
+                float stepSize = (end - start) / float(CLOUD_STEPS);
+
+                for(int i=0;i<CLOUD_STEPS;i++){
+                    float tCloud = start + stepSize*i;
+                    vec3 pos = uCamPos + rd*tCloud;
+
+                    float d = SampleCloudDensity(pos);
+
+                    // ---- APPLY FOG TO CLOUD SAMPLE ----
+                    float fogCloud = clamp(exp(-(tCloud - 1600) * 0.05), 0.0, 1.0);
+                    fogCloud *= smoothstep(0.0, 1.0, (tCloud - 1600) / (300 - 1600));
+
+                    d *= fogCloud;   // fade cloud density by fog
+
+                    float light = max(dot(-SUN_DIR, vec3(0,1,0)),0.0);
+
+                    cloudAccum += d * cloudTrans * light;
+                    cloudTrans *= (1.0 - d*0.4);
+
+                    if (cloudTrans < 0.05) break;
+                }
+            }
+        }
+    }
+
+    vec3 cloudColor = vec3(1.0);
+    color = mix(color, cloudColor, cloudAccum * 0.6);
 
     float maxRay = hit?hitDist:float(MAX_STEPS);
     float god = ComputeGodRaysFast(uCamPos,rd,maxRay);
@@ -450,9 +603,14 @@ void main(){
     god *= smoothstep(0.0,1.0,maxRay/80.0);
 
     color += vec3(1.0,0.95,0.85) * god * GODRAY_INTENSITY;
-    color += (hash21(gl_FragCoord.xy)-0.5)*0.03;
-    color = mix(color,smoothstep(0.0,1.0,color),0.4);
-    color = pow(color,vec3(0.9));
+    //color += (hash21(gl_FragCoord.xy)-0.5)*0.03;
+    color = mix(color,smoothstep(0.0,1.0,color),0.6);
+    color = pow(color,vec3(0.75));
+
+    float vibrance = 0.12;
+    vec3 avg = vec3((color.r + color.g + color.b) / 3.0);
+    vec3 delta = color - avg;
+    color += delta * vibrance * (1.0 - abs(delta));
 
     FragColor = vec4(color,1.0);
 }
