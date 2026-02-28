@@ -47,9 +47,14 @@ namespace Voxel_Raytracer
         const int BLOCK_TEX_SIZE = 16;
         const int BLOCK_TEX_LAYERS = 256;
 
+        public static bool performFullSVO = false;
+
         private Terrain terrain = new Terrain();
-        private Chunk[] _chunks;
+        public static Chunk[] ActiveChunks = [];
         private GdiTextRenderer _textRenderer;
+
+
+
 
 
         float yaw = 45.0f; // y
@@ -70,7 +75,9 @@ namespace Voxel_Raytracer
 
         int program, vao;
 
-
+        public static byte selectedBlock = 8;
+        public static List<int> chunksUpdated = new List<int>();
+        public static List<List<int>> updatedVoxelPositions = new List<List<int>>();
 
         // get system resolution
         [DllImport("user32.dll")]
@@ -273,7 +280,7 @@ namespace Voxel_Raytracer
                     localX = (localX + chunkSize) % chunkSize;
                     localY = (localY + chunkSize) % chunkSize;
                     localZ = (localZ + chunkSize) % chunkSize;
-                    int voxelId = localZ + chunkSize * (localY + chunkSize * localX);
+                    int voxelId = VoxelUtil.VoxelIDfromXYZ(localX, localY, localZ);
 
                     // early exits
                     if (targetChunkX < 0 || targetChunkY < 0 || targetChunkZ < 0) continue;
@@ -301,7 +308,7 @@ namespace Voxel_Raytracer
             for (int c = 0; c < chunks.Length; c++)
                 chunks[c].textureId = UploadVoxelChunk(chunks[c].voxelData, chunkSize);
 
-            _chunks = chunks;
+            ActiveChunks = chunks;
 
             watch.Stop();
             svoTime = watch.ElapsedMilliseconds - generationTime;
@@ -398,6 +405,8 @@ namespace Voxel_Raytracer
             var input = KeyboardState;
             var mouse = MouseState;
 
+            Interactions.HandleBlockSelection(input);
+
             yaw -= mouse.Delta.X * mouseSensitivity;
             pitch -= mouse.Delta.Y * mouseSensitivity;
             pitch = MathHelper.Clamp(pitch, -MathF.PI / 2 + 0.01f, MathF.PI / 2 - 0.01f);
@@ -412,33 +421,30 @@ namespace Voxel_Raytracer
             if (input.IsKeyDown(Keys.D)) moveDir += camRight;
             if (input.IsKeyDown(Keys.Space)) moveDir += Vector3.UnitY;
 
+
+            // check all 3 directions
             Vector3 nextPos = camPos;
             nextPos.X += moveDir.X * delta;
-            if (!VoxelUtil.CollidesAt(nextPos, _chunks, false))
-            {
+            if (!VoxelUtil.CollidesAt(nextPos, ActiveChunks, false))
                 camPos.X = nextPos.X;
-            }
 
             nextPos = camPos;
             nextPos.Y += moveDir.Y * delta;
-            if (!VoxelUtil.CollidesAt(nextPos, _chunks, false))
-            {
+            if (!VoxelUtil.CollidesAt(nextPos, ActiveChunks, false))
                 camPos.Y = nextPos.Y;
-            }
 
             nextPos = camPos;
             nextPos.Z += moveDir.Z * delta;
-            if (!VoxelUtil.CollidesAt(nextPos, _chunks, false))
-            {
+            if (!VoxelUtil.CollidesAt(nextPos, ActiveChunks, false))
                 camPos.Z = nextPos.Z;
-            }
 
             Vector3 hitPos, hitNormal;
             int hitId, cId, vId;
-            VoxelUtil.Raycast(camPos, cameraForward, _chunks, chunkSize, worldSize, 10, 5f, false, out hitPos, out hitNormal, out hitId, out vId, out cId);
+            VoxelUtil.Raycast(camPos, cameraForward, ActiveChunks, chunkSize, worldSize, 10, 5f, false, out hitPos, out hitNormal, out hitId, out vId, out cId);
 
-            List<int> chunksUpdated = new List<int>();
-            List<List<int>> updatedVoxelPositions = new List<List<int>>();
+            chunksUpdated = new List<int>();
+            updatedVoxelPositions = new List<List<int>>();
+
             while (updatedVoxelPositions.Count <= cId)
                 updatedVoxelPositions.Add(new List<int>());
 
@@ -446,42 +452,38 @@ namespace Voxel_Raytracer
             if (hitId > -1 && mouse.IsButtonDown(MouseButton.Left) && interactionTickBuildup == 0.25)
             {
                 interactionTickBuildup = 0;
-                _chunks[cId].voxelData[vId] = 254;
-
-                updatedVoxelPositions[cId].Add(vId);
-                chunksUpdated.Add(cId);
+                VoxelUtil.Destroy(cId, vId);
             }
             
             // place
             if (hitId > -1 && hitId < 251 && mouse.IsButtonDown(MouseButton.Right) && interactionTickBuildup == 0.25)
             {
                 interactionTickBuildup = 0;
-                int vx = (int)(vId / (chunkSize * chunkSize) + hitNormal.X);
-                int vy = (int)((vId / chunkSize) % chunkSize + hitNormal.Y);
-                int vz = (int)(vId % chunkSize + hitNormal.Z);
 
-                int newVID = vz + chunkSize * (vy + chunkSize * vx);
-                //Console.WriteLine(newVID);
+                int vx, vy, vz;
+                VoxelUtil.VoxelXYZfromVoxelID(vId, out vx, out vy, out vz);
+                vx += (int)hitNormal.X; vy += (int)hitNormal.Y; vz += (int)hitNormal.Z;
 
-                _chunks[cId].voxelData[newVID] = 2;
-                updatedVoxelPositions[cId].Add(newVID);
-                chunksUpdated.Add(cId);
+                VoxelUtil.Place(cId, vx, vy, vz);
             }
 
             Stopwatch debug = Stopwatch.StartNew();
 
             foreach (int listChunk in chunksUpdated)
             {
-                Console.WriteLine("updating");
                 foreach (int vId1 in updatedVoxelPositions[listChunk])
                 {
-                    int vx = vId1 / (chunkSize * chunkSize);
-                    int vy = (vId1 / chunkSize) % chunkSize;
-                    int vz = vId1 % chunkSize;
-                    terrain.PartialSVOUpdate(_chunks[listChunk].voxelData, vx, vy, vz);
+                    int vx, vy, vz;
+                    VoxelUtil.VoxelXYZfromVoxelID(vId1, out vx, out vy, out vz);
+                    if (!performFullSVO)
+                        terrain.PartialSVOUpdate(ActiveChunks[listChunk].voxelData, vx, vy, vz, ActiveChunks[listChunk].voxelData[vId1]);
                 }
+                if (performFullSVO)
+                    terrain.GenerateSVO(ActiveChunks[listChunk].voxelData, true);
                 UpdateChunkTexture(listChunk);
             }
+
+            performFullSVO = false;
 
             debug.Stop();
             if (debug.ElapsedTicks > 10)
@@ -499,7 +501,7 @@ namespace Voxel_Raytracer
 
         void UpdateChunkTexture(int chunkId)
         {
-            GL.BindTexture(TextureTarget.Texture3D, _chunks[chunkId].textureId);
+            GL.BindTexture(TextureTarget.Texture3D, ActiveChunks[chunkId].textureId);
             GL.TexSubImage3D(
                 TextureTarget.Texture3D,
                 0,
@@ -507,7 +509,7 @@ namespace Voxel_Raytracer
                 chunkSize, chunkSize, chunkSize,
                 OpenTK.Graphics.OpenGL.PixelFormat.RedInteger,
                 PixelType.UnsignedByte,
-                _chunks[chunkId].voxelData
+                ActiveChunks[chunkId].voxelData
             );
         }
 
@@ -579,14 +581,30 @@ namespace Voxel_Raytracer
             float lineSpacingScale = 30f / height;
             float textSize = 1.0f;
 
-            int voxelCount = (int)((_chunks != null ? _chunks.Length : 1) * Math.Pow(chunkSize, 3));
+            int voxelCount = (int)((ActiveChunks != null ? ActiveChunks.Length : 1) * Math.Pow(chunkSize, 3));
+
+
+            int hitId = -1;
+            int vId = -1;
+            if (ActiveChunks != null)
+            {
+                Vector3 hitNormal, hitPos;
+                int cId;
+                VoxelUtil.Raycast(camPos, cameraForward, ActiveChunks, chunkSize, worldSize, 10, 5f, false, out hitPos, out hitNormal, out hitId, out vId, out cId);
+            }
+
+            int vx = (vId / (chunkSize * chunkSize));
+            int vy = ((vId / chunkSize) % chunkSize);
+            int vz = (vId % chunkSize);
+
+
 
             _textRenderer.RenderText(
                 $"{fpsString}\n" +
                 $"world: {voxelCount / 10e5:f1}m voxels {worldSize}x{worldSize}x{worldSize} chunks\n"+
-                $"Terrain generated in: {generationTime:f1}ms with an average of {(generationTime) / (_chunks != null ? _chunks.Length : 1):f2}ms per chunk\n" +
-                $"SVO and chunk upload in: {svoTime:f1}ms with an average of {(svoTime) / (_chunks != null ? _chunks.Length : 1):f2}ms per chunk\n" +
-                $"system: {width}x{height}, {Environment.ProcessorCount} processors, {(voxelCount * 1) / 1024 / 1024}MiB for voxels\n",
+                $"Terrain generated in: {generationTime:f1}ms with an average of {(generationTime) / (ActiveChunks != null ? ActiveChunks.Length : 1):f2}ms per chunk\n" +
+                $"SVO and chunk upload in: {svoTime:f1}ms with an average of {(svoTime) / (ActiveChunks != null ? ActiveChunks.Length : 1):f2}ms per chunk\n" +
+                $"system: {width}x{height}, {Environment.ProcessorCount} processors, {(voxelCount * 1) / 1024 / 1024}MiB for voxels\n C4",
                 marginScaleX,
                 marginScaleY,
                 240, 240, 240,
@@ -594,7 +612,8 @@ namespace Voxel_Raytracer
                 );
 
             _textRenderer.RenderText(
-                $"pos: {Math.Round(camPos.X, 2)}, {Math.Round(camPos.Y, 2)}, {Math.Round(camPos.Z, 2)}",
+                $"pos: {Math.Round(camPos.X, 2)}, {Math.Round(camPos.Y, 2)}, {Math.Round(camPos.Z, 2)}\n" +
+                $"looking at {hitId} @ ({vx}, {vy}, {vz})",
                 marginScaleX,
                 marginScaleY + lineSpacingScale * 6,
                 240, 180, 50,
@@ -611,7 +630,7 @@ namespace Voxel_Raytracer
 
             // Example for bottom-right HUD element (normalized coordinates)
             _textRenderer.RenderText(
-                $"[1] - Grass Block",
+                $"Selected: {selectedBlock}",
                 10f / width,
                 0.98f - _textRenderer.GetHeight(1.0f) / height,
                 255, 255, 255,

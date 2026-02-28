@@ -9,6 +9,9 @@
 5 - birch_leaves
 6 - pine_leaves
 
+7 - explosives
+8 - detonator
+
 128 - grass regular
 129 - grass shorter
 130 - grass shortest
@@ -23,10 +26,11 @@
 Chunk ID from position	
 cId = (cx * worldSize + cz) * worldSize + cy
 
-Chunk position from ID	
+Chunk position from ID
+cx = cId / (worldSize * worldSize)
 cy = cId % worldSize
 cz = (cId / worldSize) % worldSize
-cx = cId / (worldSize * worldSize)
+
 
 Voxel ID from local block position	
 vId = vz + chunkSize * (vy + chunkSize * vx)

@@ -152,6 +152,10 @@ bool IntersectGrass(
         texUV.y = p.y; // vertical along blade
         texUV.x = clamp(dot(pSway - vec3(0.5), swayDir) / W * 0.5 + 0.5, 0.0, 1.0);
 
+
+
+
+
         // Sample texture
         vec4 texSample = texture(uBlockTextures, vec3(texUV, 7));
 
@@ -204,7 +208,7 @@ bool TraceShadow(vec3 startPos){
         ).r;
 
         // Check SVO sizes
-       int svoSize = 1;
+        int svoSize = 1;
         int svoMask = 0;
         if(id == 253u) { svoSize = 16; svoMask = 15; }  // 16
         else if(id == 252u){ svoSize = 32; svoMask = 31; } // 32
@@ -388,42 +392,34 @@ void main(){
         if(svoMask != 0)
         {
             ivec3 regionBase = mapPos & ~svoMask;
-            vec3 boxMin = vec3(regionBase);
-            vec3 boxMax = boxMin + vec3(svoSize);
-
-            // Ray-box intersection
-            vec3 invDir = 1.0 / rd;
-            vec3 t0 = (boxMin - uCamPos) * invDir;
-            vec3 t1 = (boxMax - uCamPos) * invDir;
-
-            vec3 tsmaller = min(t0, t1);
-            vec3 tbigger  = max(t0, t1);
-
-            float tEnter = max(max(tsmaller.x, tsmaller.y), tsmaller.z);
-            float tExit  = min(min(tbigger.x, tbigger.y), tbigger.z);
-
-            if(tExit <= tEnter) continue;
-
-            // Use a very small epsilon to nudge into the next voxel
-            float epsilon = 0.001; 
-            t = tExit + epsilon; 
-
-            // Sync the mapPos and sideDist to the NEW position after the jump
-            vec3 jumpPos = uCamPos + rd * t;
-            mapPos = ivec3(floor(jumpPos));
-
-            // IMPORTANT: You must fully refresh sideDist here
-            sideDist = (vec3(step) * (vec3(mapPos) - uCamPos + 0.5 + vec3(step) * 0.5)) * deltaDist;
     
-            // Also re-calculate sideDist based on the standard DDA formula 
-            // to ensure the next loop iteration doesn't use old data
-            sideDist = vec3(
-                ((rd.x < 0.0) ? (jumpPos.x - float(mapPos.x)) : (float(mapPos.x + 1.0) - jumpPos.x)) * deltaDist.x,
-                ((rd.y < 0.0) ? (jumpPos.y - float(mapPos.y)) : (float(mapPos.y + 1.0) - jumpPos.y)) * deltaDist.y,
-                ((rd.z < 0.0) ? (jumpPos.z - float(mapPos.z)) : (float(mapPos.z + 1.0) - jumpPos.z)) * deltaDist.z
-            );
+            vec3 distExit;
+            distExit.x = (step.x > 0 ? float(regionBase.x + svoSize) - uCamPos.x : uCamPos.x - float(regionBase.x)) * deltaDist.x;
+            distExit.y = (step.y > 0 ? float(regionBase.y + svoSize) - uCamPos.y : uCamPos.y - float(regionBase.y)) * deltaDist.y;
+            distExit.z = (step.z > 0 ? float(regionBase.z + svoSize) - uCamPos.z : uCamPos.z - float(regionBase.z)) * deltaDist.z;
 
-            continue; 
+
+            float tExit;
+            if (distExit.x < distExit.y) {
+                if (distExit.x < distExit.z) { mask = 0; tExit = distExit.x; }
+                else                         { mask = 2; tExit = distExit.z; }
+            } else {
+                if (distExit.y < distExit.z) { mask = 1; tExit = distExit.y; }
+                else                         { mask = 2; tExit = distExit.z; }
+            }
+            vec3 jumpPos = uCamPos + rd * (tExit + 0.0001);
+            mapPos = ivec3(floor(jumpPos));
+    
+            if (mask == 0) mapPos.x = step.x > 0 ? regionBase.x + svoSize : regionBase.x - 1;
+            else if (mask == 1) mapPos.y = step.y > 0 ? regionBase.y + svoSize : regionBase.y - 1;
+            else mapPos.z = step.z > 0 ? regionBase.z + svoSize : regionBase.z - 1;
+
+            sideDist.x = ((step.x < 0) ? (uCamPos.x - float(mapPos.x)) : (float(mapPos.x + 1) - uCamPos.x)) * deltaDist.x;
+            sideDist.y = ((step.y < 0) ? (uCamPos.y - float(mapPos.y)) : (float(mapPos.y + 1) - uCamPos.y)) * deltaDist.y;
+            sideDist.z = ((step.z < 0) ? (uCamPos.z - float(mapPos.z)) : (float(mapPos.z + 1) - uCamPos.z)) * deltaDist.z;
+
+
+            continue;
         }
 
         // ---------- Grass intersection ----------
@@ -485,6 +481,19 @@ void main(){
             vec3 hitPos = uCamPos + rd * (hitDist);
             vec3 local = fract(hitPos);
             vec2 texUV = (mask==0) ? local.zy : (mask==1) ? local.xz : local.xy;
+
+            if(mask == 0){ // X face
+                texUV = local.zy;
+                if(step.x < 0) texUV.x = 1.0 - texUV.x;
+            }
+            else if(mask == 1){ // Y face
+                texUV = local.xz;
+                if(step.y < 0) texUV.y = 1.0 - texUV.y;
+            }
+            else{ // Z face
+                texUV = local.xy;
+                if(step.z > 0) texUV.x = 1.0 - texUV.x;
+            }
 
             // 3. Analytically calculate Mip Level
             vec2 texSize = vec2(textureSize(uBlockTextures, 0).xy);

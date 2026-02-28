@@ -1,6 +1,8 @@
-﻿using System;
-using OpenTK.Graphics.OpenGL;
+﻿using OpenTK.Graphics.OpenGL;
 using OpenTK.Mathematics;
+using System;
+using System.Security.Cryptography;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace Voxel_Raytracer
 {
@@ -12,6 +14,7 @@ namespace Voxel_Raytracer
         static int height => config.height;
         static int worldSize => config.worldSize;
         static int chunkSize => config.chunkSize;
+        static int voxelsPerChunk = chunkSize * chunkSize * chunkSize;
         private const float playerWidth = 0.2f;
         private const float playerHeight = 0.2f;
 
@@ -195,5 +198,100 @@ namespace Voxel_Raytracer
 
             return false;
         }
+
+        public static byte BlockIDAtID(int cId, int vId)
+        {
+            return Renderer.ActiveChunks[cId].voxelData[vId];
+        }
+
+        public static byte BlockIDAtXYZ(int cx, int cy, int cz, int x, int y, int z)
+        {
+            int cId = ChunkIDfromXYZ(cx, cy, cz);
+            int vId = VoxelIDfromXYZ(x, y, z);
+            return Renderer.ActiveChunks[cId].voxelData[vId];
+        }
+
+        public static (int, int, int) ChunkXYZfromChunkID(int cId, out int cx, out int cy, out int cz)
+        {
+            cx = cId / (worldSize * worldSize);
+            cz = (cId / worldSize) % worldSize;
+            cy = cId % worldSize;
+
+            return (cx, cy, cz);
+        }
+
+        public static (int, int, int) VoxelXYZfromVoxelID(int vId, out int x, out int y, out int z)
+        {
+            x = vId / (chunkSize * chunkSize);
+            y = (vId / chunkSize) % chunkSize;
+            z = vId % chunkSize;
+            return (x, y, z);
+        }
+
+        public static int ChunkIDfromXYZ(int cx, int cy, int cz)
+        {
+            return (cx * worldSize + cz) * worldSize + cy;
+        }
+
+        public static int VoxelIDfromXYZ(int x, int y, int z)
+        {
+            return z + chunkSize * (y + chunkSize * x);
+        }
+
+
+
+        public static void Destroy(int cId, int vId)
+        {
+            if (cId < 0 || cId >= Renderer.ActiveChunks.Length || vId < 0 || vId >= voxelsPerChunk)
+                return; // out of bounds, ignore
+
+            byte oldBlock = Renderer.ActiveChunks[cId].voxelData[vId];
+            if (oldBlock == 251 || oldBlock == 252 || oldBlock == 253 || oldBlock == 254 || oldBlock == 255)
+                return; // no need to remove air
+
+            Renderer.ActiveChunks[cId].voxelData[vId] = 254;
+
+            while (Renderer.updatedVoxelPositions.Count <= cId)
+                Renderer.updatedVoxelPositions.Add(new List<int>());
+
+            Renderer.updatedVoxelPositions[cId].Add(vId);
+
+            if (!Renderer.chunksUpdated.Contains(cId))
+                Renderer.chunksUpdated.Add(cId);
+
+            Interactions.RemovedEvent(oldBlock, vId, cId);
+        }
+
+        public static void Place(int cId, int vx, int vy, int vz)
+        {
+            byte selectedBlock = Renderer.selectedBlock;
+
+            int cx, cy, cz;
+            VoxelUtil.ChunkXYZfromChunkID(cId, out cx, out cy, out cz);
+
+            int cModX = vx >= chunkSize ? 1 : (vx < 0 ? -1 : 0);
+            int cModY = vy >= chunkSize ? 1 : (vy < 0 ? -1 : 0);
+            int cModZ = vz >= chunkSize ? 1 : (vz < 0 ? -1 : 0);
+
+            vx = vx >= chunkSize ? vx - chunkSize : (vx < 0 ? vx + chunkSize : vx);
+            vy = vy >= chunkSize ? vy - chunkSize : (vy < 0 ? vy + chunkSize : vy);
+            vz = vz >= chunkSize ? vz - chunkSize : (vz < 0 ? vz + chunkSize : vz);
+
+
+            int newVID = VoxelUtil.VoxelIDfromXYZ(vx, vy, vz);
+            int newCID = VoxelUtil.ChunkIDfromXYZ(cx + cModX, cy + cModY, cz + cModZ);
+
+            // expand list if needed
+            while (Renderer.updatedVoxelPositions.Count <= newCID)
+                Renderer.updatedVoxelPositions.Add(new List<int>());
+
+            Renderer.ActiveChunks[newCID].voxelData[newVID] = selectedBlock;
+            Renderer.updatedVoxelPositions[newCID].Add(newVID);
+            Renderer.chunksUpdated.Add(newCID);
+
+            Interactions.PlacedEvent(selectedBlock, newVID, newCID);
+        }
+
+
     }
 }

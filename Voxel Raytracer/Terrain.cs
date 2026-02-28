@@ -410,137 +410,89 @@ namespace Voxel_Raytracer
             return result;
         }
 
-        public void PartialSVOUpdate(byte[] result, int vx, int vy, int vz)
+        public void PartialSVOUpdate(byte[] result, int vx, int vy, int vz, byte newBlockId)
         {
-            int size = chunkSize;
-
-            // ---------------- LEVEL 1 (16³) ----------------
-            const int l1 = 16;
-
-            int ox1 = (vx / l1) * l1;
-            int oy1 = (vy / l1) * l1;
-            int oz1 = (vz / l1) * l1;
-
-            int marker1 = oz1 + size * (oy1 + size * ox1);
-
-            // 🔴 EXPAND if region was collapsed
-            if (result[marker1] == 253)
+            if (result[0] == 255)
             {
-                for (int x = ox1; x < ox1 + l1; x++)
-                    for (int y = oy1; y < oy1 + l1; y++)
-                        for (int z = oz1; z < oz1 + l1; z++)
-                        {
-                            int idx = z + size * (y + size * x);
+                FillRegionID(result, 128, 0, 0, 0, 251);
+            }
 
-                            if (result[idx] == 253)
+            ExplodeRegion(result, vx, vy, vz, 64, 251, 252);
+            ExplodeRegion(result, vx, vy, vz, 32, 252, 253);
+            ExplodeRegion(result, vx, vy, vz, 16, 253, 254);
+
+            int finalIdx = vz + chunkSize * (vy + chunkSize * vx);
+            result[finalIdx] = newBlockId;
+
+            UpdateLevel(result, vx, vy, vz, 16, 253, null, null);
+            UpdateLevel(result, vx, vy, vz, 32, 252, 16, 253);
+            UpdateLevel(result, vx, vy, vz, 64, 251, 32, 252);
+            UpdateLevel(result, vx, vy, vz, 128, 255, 64, 251);
+        }
+
+        private void ExplodeRegion(byte[] result, int vx, int vy, int vz, int size, byte currentMarker, byte nextMarker)
+        {
+            int ox = (vx / size) * size;
+            int oy = (vy / size) * size;
+            int oz = (vz / size) * size;
+
+            int idx = oz + chunkSize * (oy + chunkSize * ox);
+
+            if (result[idx] == currentMarker)
+            {
+                FillRegionID(result, size, ox, oy, oz, nextMarker);
+            }
+        }
+
+        private void UpdateLevel(byte[] result, int vx, int vy, int vz,
+                                 int regionSize, byte marker,
+                                 int? subRegionSize = null, byte? subMarker = null)
+        {
+            int ox = (vx / regionSize) * regionSize;
+            int oy = (vy / regionSize) * regionSize;
+            int oz = (vz / regionSize) * regionSize;
+
+            int step = subRegionSize ?? 1;
+            byte checkMarker = subMarker ?? 254;
+
+            bool allEmpty = true;
+
+            // Scan the entire region
+            for (int x = ox; x < ox + regionSize && allEmpty; x += step)
+                for (int y = oy; y < oy + regionSize && allEmpty; y += step)
+                    for (int z = oz; z < oz + regionSize && allEmpty; z += step)
+                    {
+                        if (x >= chunkSize || y >= chunkSize || z >= chunkSize) continue;
+
+                        int idx = z + chunkSize * (y + chunkSize * x);
+                        byte b = result[idx];
+
+                        if (b != checkMarker)
+                        {
+                            allEmpty = false;
+                            break;
+                        }
+                    }
+
+            if (allEmpty)
+            {
+                // Fill the region with the marker
+                FillRegionID(result, regionSize, ox, oy, oz, marker);
+            }
+            else if (marker != 254)
+            {
+                // Expand any collapsed markers inside
+                for (int x = ox; x < ox + regionSize; x += step)
+                    for (int y = oy; y < oy + regionSize; y += step)
+                        for (int z = oz; z < oz + regionSize; z += step)
+                        {
+                            if (x >= chunkSize || y >= chunkSize || z >= chunkSize) continue;
+
+                            int idx = z + chunkSize * (y + chunkSize * x);
+                            if (result[idx] == marker)
                                 result[idx] = 254;
                         }
             }
-
-            // Now rescan region
-            bool allAir = true;
-
-            for (int x = ox1; x < ox1 + l1 && allAir; x++)
-                for (int y = oy1; y < oy1 + l1 && allAir; y++)
-                    for (int z = oz1; z < oz1 + l1; z++)
-                    {
-                        int idx = z + size * (y + size * x);
-                        byte b = result[idx];
-
-                        if (b != 254 && IsRegionMarker[b] == 0)
-                        {
-                            allAir = false;
-                            break;
-                        }
-                    }
-
-            if (allAir)
-                FillRegionID(result, l1, ox1, oy1, oz1, 253);
-
-
-
-            // ---------------- LEVEL 2 (32³) ----------------
-            const int l2 = 32;
-            int ox2 = (vx / l2) * l2;
-            int oy2 = (vy / l2) * l2;
-            int oz2 = (vz / l2) * l2;
-
-            bool allEmptyL2 = true;
-
-            for (int sx = 0; sx < 2 && allEmptyL2; sx++)
-                for (int sy = 0; sy < 2 && allEmptyL2; sy++)
-                    for (int sz = 0; sz < 2; sz++)
-                    {
-                        int subX = ox2 + sx * 16;
-                        int subY = oy2 + sy * 16;
-                        int subZ = oz2 + sz * 16;
-
-                        int subMarker = subZ + size * (subY + size * subX);
-
-                        if (result[subMarker] != 253)
-                        {
-                            allEmptyL2 = false;
-                            break;
-                        }
-                    }
-
-            if (allEmptyL2)
-                FillRegionID(result, l2, ox2, oy2, oz2, 252);
-
-
-
-            // ---------------- LEVEL 3 (64³) ----------------
-            const int l3 = 64;
-            int ox3 = (vx / l3) * l3;
-            int oy3 = (vy / l3) * l3;
-            int oz3 = (vz / l3) * l3;
-
-            bool allEmptyL3 = true;
-
-            for (int sx = 0; sx < 2 && allEmptyL3; sx++)
-                for (int sy = 0; sy < 2 && allEmptyL3; sy++)
-                    for (int sz = 0; sz < 2; sz++)
-                    {
-                        int subX = ox3 + sx * 32;
-                        int subY = oy3 + sy * 32;
-                        int subZ = oz3 + sz * 32;
-
-                        int subMarker = subZ + size * (subY + size * subX);
-
-                        if (result[subMarker] != 252)
-                        {
-                            allEmptyL3 = false;
-                            break;
-                        }
-                    }
-
-            if (allEmptyL3)
-                FillRegionID(result, l3, ox3, oy3, oz3, 251);
-
-
-
-            // ---------------- LEVEL 4 (128³ whole chunk) ----------------
-            bool allEmptyL4 = true;
-
-            for (int sx = 0; sx < 2 && allEmptyL4; sx++)
-                for (int sy = 0; sy < 2 && allEmptyL4; sy++)
-                    for (int sz = 0; sz < 2; sz++)
-                    {
-                        int subX = sx * 64;
-                        int subY = sy * 64;
-                        int subZ = sz * 64;
-
-                        int subMarker = subZ + size * (subY + size * subX);
-
-                        if (result[subMarker] != 251)
-                        {
-                            allEmptyL4 = false;
-                            break;
-                        }
-                    }
-
-            if (allEmptyL4)
-                FillRegionID(result, 128, 0, 0, 0, 255);
         }
     }
 

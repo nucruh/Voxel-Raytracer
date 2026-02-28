@@ -77,6 +77,12 @@
     <None Update="textures16x\6.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="textures16x\7.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="textures16x\8.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Update="textures32x\0.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
