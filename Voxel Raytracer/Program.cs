@@ -52,6 +52,7 @@ namespace Voxel_Raytracer
         private Terrain terrain = new Terrain();
         public static Chunk[] ActiveChunks = [];
         private GdiTextRenderer _textRenderer;
+        private int voxelTextureArray;
 
 
 
@@ -226,11 +227,11 @@ namespace Voxel_Raytracer
             base.OnLoad();
 
             CursorState = CursorState.Grabbed;
-
             _textRenderer = new GdiTextRenderer(width, height, "Monocraft", 20f);
 
             var watch = Stopwatch.StartNew();
 
+            // --- 1. Terrain & Chunk Generation (Preserving your x -> z -> y logic) ---
             ConcurrentDictionary<(int x, int y, int z), List<int>> outOfBounds = new ConcurrentDictionary<(int x, int y, int z), List<int>>();
             ConcurrentDictionary<(int x, int y, int z), long> associatedTuples = new ConcurrentDictionary<(int x, int y, int z), long>();
 
@@ -256,19 +257,13 @@ namespace Voxel_Raytracer
                 };
             });
 
+            // Handle OOB Voxels
             foreach (var kv in outOfBounds)
             {
-                int chunkX = kv.Key.x;
-                int chunkY = kv.Key.y;
-                int chunkZ = kv.Key.z;
-
+                int chunkX = kv.Key.x; int chunkY = kv.Key.y; int chunkZ = kv.Key.z;
                 for (int i = 0; i < kv.Value.Count; i += 4)
                 {
-                    int x = kv.Value[i];
-                    int y = kv.Value[i + 1];
-                    int z = kv.Value[i + 2];
-                    int id = kv.Value[i + 3];
-
+                    int x = kv.Value[i]; int y = kv.Value[i + 1]; int z = kv.Value[i + 2]; int id = kv.Value[i + 3];
                     int targetChunkX = chunkX + Math.DivRem(x, chunkSize, out int localX);
                     int targetChunkY = chunkY + Math.DivRem(y, chunkSize, out int localY);
                     int targetChunkZ = chunkZ + Math.DivRem(z, chunkSize, out int localZ);
@@ -280,9 +275,10 @@ namespace Voxel_Raytracer
                     localX = (localX + chunkSize) % chunkSize;
                     localY = (localY + chunkSize) % chunkSize;
                     localZ = (localZ + chunkSize) % chunkSize;
-                    int voxelId = VoxelUtil.VoxelIDfromXYZ(localX, localY, localZ);
 
-                    // early exits
+                    // Using your specific logic: z + size * (y + size * x)
+                    int voxelId = localZ + chunkSize * (localY + chunkSize * localX);
+
                     if (targetChunkX < 0 || targetChunkY < 0 || targetChunkZ < 0) continue;
                     if (!associatedTuples.TryGetValue((targetChunkX, targetChunkY, targetChunkZ), out long chunkId)) continue;
                     if (voxelId < 0 || voxelId >= chunkSize * chunkSize * chunkSize) continue;
@@ -291,109 +287,73 @@ namespace Voxel_Raytracer
                 }
             }
 
-            watch.Stop();
             generationTime = watch.ElapsedMilliseconds;
+            watch.Restart();
 
-            watch.Start();
-
-            Parallel.For(0, chunks.Length, idx =>
-            {
-                var chunk = chunks[idx];
-
-                terrain.GenerateSVO(chunk.voxelData, false);
+            // SVO Generation
+            Parallel.For(0, chunks.Length, idx => {
+                terrain.GenerateSVO(chunks[idx].voxelData, false);
             });
-
-
-            // upload voxel chunks
-            for (int c = 0; c < chunks.Length; c++)
-                chunks[c].textureId = UploadVoxelChunk(chunks[c].voxelData, chunkSize);
 
             ActiveChunks = chunks;
 
-            watch.Stop();
-            svoTime = watch.ElapsedMilliseconds - generationTime;
+            int texWidth = worldSize * chunkSize;
+            int texHeight = worldHeightChunks * chunkSize;
+            int texDepth = worldSize * chunkSize;
 
-            // build shader
+            voxelTextureArray = GL.GenTexture();
+            GL.BindTexture(TextureTarget.Texture3D, voxelTextureArray);
+
+            GL.TexImage3D(
+                TextureTarget.Texture3D, 0, PixelInternalFormat.R8ui,
+                texWidth, texHeight, texDepth, 0,
+                OpenTK.Graphics.OpenGL.PixelFormat.RedInteger, PixelType.UnsignedByte, IntPtr.Zero
+            );
+
+            // Explicitly kill any linear interpolation
+            GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+            GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+
+            // Ensure the texture doesn't "wrap" and sample from the opposite side of the world
+            GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
+
+            for (int i = 0; i < ActiveChunks.Length; i++)
+            {
+                UpdateChunkTexture(i);
+            }
+
+            svoTime = watch.ElapsedMilliseconds;
+
+            // --- 3. Shaders & Uniforms ---
             program = BuildShader();
             GL.UseProgram(program);
 
+            // Block Texture Array
             blockTextureArray = GL.GenTexture();
             GL.ActiveTexture(TextureUnit.Texture0);
             GL.BindTexture(TextureTarget.Texture2DArray, blockTextureArray);
-
-            GL.TexImage3D(
-                TextureTarget.Texture2DArray,
-                0,
-                PixelInternalFormat.Rgba8,
-                BLOCK_TEX_SIZE,
-                BLOCK_TEX_SIZE,
-                BLOCK_TEX_LAYERS,
-                0,
-                OpenTK.Graphics.OpenGL.PixelFormat.Rgba,
-                PixelType.UnsignedByte,
-                IntPtr.Zero
-            );
-
+            GL.TexImage3D(TextureTarget.Texture2DArray, 0, PixelInternalFormat.Rgba8, BLOCK_TEX_SIZE, BLOCK_TEX_SIZE, BLOCK_TEX_LAYERS, 0, OpenTK.Graphics.OpenGL.PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
             for (int i = 0; i < BLOCK_TEX_LAYERS; i++)
             {
                 byte[] pixels = LoadBlockTexture(i);
-
-                GL.TexSubImage3D(
-                    TextureTarget.Texture2DArray,
-                    0,
-                    0, 0, i,
-                    BLOCK_TEX_SIZE,
-                    BLOCK_TEX_SIZE,
-                    1,
-                    OpenTK.Graphics.OpenGL.PixelFormat.Rgba,
-                    PixelType.UnsignedByte,
-                    pixels
-                );
+                GL.TexSubImage3D(TextureTarget.Texture2DArray, 0, 0, 0, i, BLOCK_TEX_SIZE, BLOCK_TEX_SIZE, 1, OpenTK.Graphics.OpenGL.PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
             }
-
-            // Enable mipmaps
-            GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.NearestMipmapNearest);
-            GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
-
-            // Wrap mode stays the same
-            GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-            GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-
-            // Generate mipmaps for the texture array
             GL.GenerateMipmap(GenerateMipmapTarget.Texture2DArray);
+            GL.Uniform1(GL.GetUniformLocation(program, "uBlockTextures"), 0);
 
-            GL.Uniform1(
-                GL.GetUniformLocation(program, "uBlockTextures"),
-                0
-            );
+            // Bind Global Voxel Volume to Unit 1
+            GL.ActiveTexture(TextureUnit.Texture1);
+            GL.BindTexture(TextureTarget.Texture3D, voxelTextureArray);
+            GL.Uniform1(GL.GetUniformLocation(program, "uVoxelTexArray"), 1);
 
-            for (int i = 0; i < chunks.Length; i++)
-            {
-                int texUnit = 1 + i;
-
-                GL.ActiveTexture(TextureUnit.Texture0 + texUnit);
-                GL.BindTexture(TextureTarget.Texture3D, chunks[i].textureId);
-
-                GL.Uniform1(
-                    GL.GetUniformLocation(program, $"uVoxelTex[{i}]"),
-                    texUnit
-                );
-            }
-
-            // Other uniforms
-            GL.Uniform3(
-                GL.GetUniformLocation(program, "uVoxelDim"),
-                chunkSize, chunkSize, chunkSize
-            );
+            GL.Uniform3(GL.GetUniformLocation(program, "uVoxelDim"), chunkSize, chunkSize, chunkSize);
 
             vao = FullscreenTriangle();
-
-            Console.WriteLine("loaded shaders");
+            Console.WriteLine("AMD-compatible Global Volume Initialized.");
         }
 
-
-        int frameCount = 0;
-        double timeBuildup = 0;
         double interactionTickBuildup = 0;
 
         protected override void OnUpdateFrame(FrameEventArgs args)
@@ -501,15 +461,23 @@ namespace Voxel_Raytracer
 
         void UpdateChunkTexture(int chunkId)
         {
-            GL.BindTexture(TextureTarget.Texture3D, ActiveChunks[chunkId].textureId);
+            var chunk = ActiveChunks[chunkId];
+
+            // Offsets are flipped to match the (Z, Y, X) texture allocation
+            int offsetZ_tex = chunk.coords.X * chunkSize;
+            int offsetY_tex = chunk.coords.Y * chunkSize;
+            int offsetX_tex = chunk.coords.Z * chunkSize;
+
+            GL.BindTexture(TextureTarget.Texture3D, voxelTextureArray);
+
             GL.TexSubImage3D(
                 TextureTarget.Texture3D,
                 0,
-                0, 0, 0,
+                offsetX_tex, offsetY_tex, offsetZ_tex,
                 chunkSize, chunkSize, chunkSize,
                 OpenTK.Graphics.OpenGL.PixelFormat.RedInteger,
                 PixelType.UnsignedByte,
-                ActiveChunks[chunkId].voxelData
+                chunk.voxelData
             );
         }
 

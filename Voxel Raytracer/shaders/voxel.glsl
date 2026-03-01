@@ -9,7 +9,7 @@ uniform vec3 uCamForward;
 uniform vec3 uCamRight;
 uniform vec3 uCamUp;
 
-uniform usampler3D uVoxelTex[64];
+uniform usampler3D uVoxelTexArray;
 uniform ivec3 uVoxelDim;
 
 uniform sampler2DArray uBlockTextures;
@@ -105,16 +105,17 @@ bool IntersectGrass(
     bool hit = false;
 
     const float W = 0.5;
-    const float ROT = 0.70710678; // cos 45
+    const float ROT = 0.70710678;
 
-
-    //  wtf why sway no worke idk
-    // wind params
     float windSpeed = 2.0;
     float windStrength = 0.15;
     float windPhase = hash21(vec2(voxel.x, voxel.z)) * 6.28318;
 
-    // Two crossed planes
+    // Get texture dimensions for texelFetch scaling
+    // Level 0 of the texture array
+    ivec3 texDims = textureSize(uBlockTextures, 0); 
+    vec2 fTexDims = vec2(texDims.xy);
+
     vec3 planes[2] = vec3[2](
         normalize(vec3( ROT, 0.0,  ROT)),
         normalize(vec3(-ROT, 0.0,  ROT))
@@ -133,26 +134,34 @@ bool IntersectGrass(
         vec3 p = o + rd * t;
         if(p.y < 0.0 || p.y > 1.0) continue;
 
-        vec3 d = p - vec3(0.5);
-        float side = dot(d, swayDir);
-        if(abs(side) > W) continue;
-
-        float swayFactor = pow(p.y, 2.0);
-        float wave = sin(iTime * windSpeed + windPhase + float(i) * 1.57) 
-                     * windStrength * swayFactor;
-
+        // --- Sway Logic ---
+        float swayFactor = p.y * p.y;
+        float wave = sin(iTime * windSpeed + windPhase + float(i) * 1.57) * windStrength * swayFactor;
+        
         vec3 pSway = p + swayDir * wave;
+        
+        // Horizontal mapping: centers the blade and scales by W
+        float u = (dot(pSway - vec3(0.5), swayDir) / W) * 0.5 + 0.5;
+        float v = p.y;
 
-        vec2 texUV;
-        texUV.y = p.y;
-        texUV.x = clamp(dot(pSway - vec3(0.5), swayDir) / W * 0.5 + 0.5, 0.0, 1.0);
+        // 2. Bounds Check (crucial for nearest sampling to avoid 'bleeding')
+        if(u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0) continue;
 
-        vec4 texSample = texture(uBlockTextures, vec3(texUV, 7));
+        // 3. Convert to Integer Texel Coordinates
+        // Using floor() on (UV * Size) gives you the exact pixel index.
+        ivec2 texelCoord = ivec2(floor(vec2(u, v) * fTexDims));
+        
+        // Clamp to valid range [0, Dims-1]
+        texelCoord = clamp(texelCoord, ivec2(0), texDims.xy - 1);
 
-        if(texSample.a > 0.0){
+        // 4. Manual Point Fetch
+        vec4 texSample = texelFetch(uBlockTextures, ivec3(texelCoord, 7), 0);
+
+        // 5. Hard Alpha Cutoff (for that retro/aliased look)
+        if(texSample.a > 0.5) { 
             bestT = t;
             bestN = n;
-            alpha = texSample.a;
+            alpha = 1.0; // Force full opacity for the 'crunchy' look
             hit = true;
         }
     }
@@ -191,11 +200,8 @@ bool TraceShadow(vec3 startPos){
         int cz = mapPos.z>>CHUNK_PWR;
         int chunkIndex = cx*(WORLD_SIZE_Y*WORLD_SIZE_Z)+cz*WORLD_SIZE_Y+cy;
 
-        uint id = texelFetch(
-            uVoxelTex[chunkIndex],
-            ivec3(mapPos.z&CHUNK_MASK,mapPos.y&CHUNK_MASK,mapPos.x&CHUNK_MASK),
-            0
-        ).r;
+        ivec3 localMapPos = mapPos & CHUNK_MASK;
+        uint id = texelFetch(uVoxelTexArray, ivec3(mapPos.z, mapPos.y, mapPos.x), 0).r;
 
         // get svo sizes
         int svoSize = 1;
@@ -359,11 +365,9 @@ void main(){
 
         ivec3 localMapPos = mapPos & CHUNK_MASK;
 
-        uint id = texelFetch(
-            uVoxelTex[chunkIndex],
-            ivec3(localMapPos.z, localMapPos.y, localMapPos.x),
-            0
-        ).r;
+        int layer = chunkIndex;
+
+        uint id = texelFetch(uVoxelTexArray, ivec3(mapPos.z, mapPos.y, mapPos.x), 0).r;
 
         // get svo size for voxel
         int svoSize = 1;
@@ -418,9 +422,29 @@ void main(){
 
             if(IntersectGrass(uCamPos, rd, mapPos, 1000.0, tg, gN, ga)){
                 vec3 hitPos = uCamPos + rd * tg;
-                vec3 localPos = clamp(hitPos - vec3(mapPos), 0.0, 1.0);
-                vec2 texUV = abs(gN.x) > 0.0 ? vec2(localPos.z, localPos.y) : vec2(localPos.x, localPos.y);
-                vec4 texSample = texture(uBlockTextures, vec3(texUV, float(id)));
+                vec3 p1 = hitPos - vec3(mapPos); // This is your localPos
+
+                // --- 1. Reconstruct Sway for the FIRST hit ---
+                vec3 swayDir1 = vec3(-gN.z, 0.0, gN.x);
+                float windPhase1 = hash21(vec2(mapPos.x, mapPos.z)) * 6.28318;
+    
+                // Check which plane was hit (0 or 1) based on the normal to get the right phase offset
+                // Using a small epsilon for the float comparison
+                float planeIdx1 = (dot(gN, normalize(vec3(ROT, 0.0, ROT))) > 0.9) ? 0.0 : 1.0; 
+
+                float wave1 = sin(iTime * 2.0 + windPhase1 + planeIdx1 * 1.57) * 0.15 * (p1.y * p1.y);
+                vec3 pSway1 = p1 + swayDir1 * wave1;
+
+                // --- 2. Map to UV ---
+                float u1 = (dot(pSway1 - vec3(0.5), swayDir1) / 0.5) * 0.5 + 0.5;
+                float v1 = p1.y;
+
+                // --- 3. Manual Point Sample (texelFetch) ---
+                ivec3 texDims = textureSize(uBlockTextures, 0);
+                ivec2 pixelCoord1 = ivec2(floor(vec2(u1, v1) * vec2(texDims.xy)));
+                pixelCoord1 = clamp(pixelCoord1, ivec2(0), texDims.xy - 1);
+
+                vec4 texSample = texelFetch(uBlockTextures, ivec3(pixelCoord1, int(id)), 0);
 
                 grassCol += texSample.rgb * texSample.a * FOLIAGE_TINT;
                 accumAlpha += texSample.a;
@@ -430,25 +454,46 @@ void main(){
                 if(texSample.a < 0.99){
                     float tg2; vec3 gN2; float ga2;
                     vec3 ro2 = uCamPos + rd * (tg + 0.002);
+    
                     if(IntersectGrass(ro2, rd, mapPos, 1000.0, tg2, gN2, ga2)){
                         vec3 hitPos2 = ro2 + rd * tg2;
-                        vec3 localPos2 = clamp(hitPos2 - vec3(mapPos), 0.0, 1.0);
-                        vec2 texUV2 = abs(gN2.x) > 0.0 ? vec2(localPos2.z, localPos2.y) : vec2(localPos2.x, localPos2.y);
-                        vec4 texSample2 = texture(uBlockTextures, vec3(texUV2, float(id)));
+                        vec3 p2 = hitPos2 - vec3(mapPos);
+        
+                        // 1. Reconstruct Sway for the second hit
+                        vec3 swayDir2 = vec3(-gN2.z, 0.0, gN2.x);
+                        float windPhase2 = hash21(vec2(mapPos.x, mapPos.z)) * 6.28318;
+                        // Determine if this is plane 0 or 1 based on the normal
+                        float planeIdx = (abs(gN2.x - ROT) < 0.01) ? 0.0 : 1.0; 
+        
+                        float wave2 = sin(iTime * 2.0 + windPhase2 + planeIdx * 1.57) * 0.15 * (p2.y * p2.y);
+                        vec3 pSway2 = p2 + swayDir2 * wave2;
+
+                        // 2. Map to UV
+                        float u2 = (dot(pSway2 - vec3(0.5), swayDir2) / 0.5) * 0.5 + 0.5;
+                        float v2 = p2.y;
+
+                        // 3. Manual Point Sample (texelFetch)
+                        ivec3 texDims = textureSize(uBlockTextures, 0);
+                        ivec2 pixelCoord2 = ivec2(floor(vec2(u2, v2) * vec2(texDims.xy)));
+                        pixelCoord2 = clamp(pixelCoord2, ivec2(0), texDims.xy - 1);
+
+                        vec4 texSample2 = texelFetch(uBlockTextures, ivec3(pixelCoord2, int(id)), 0);
+        
+                        // 4. Alpha Blending
                         float a2 = texSample2.a * (1.0 - accumAlpha);
                         grassCol += texSample2.rgb * a2 * FOLIAGE_TINT;
                         accumAlpha += a2;
                     }
                 }
 
-                hitCol = mix(hitCol, grassCol, accumAlpha);
-                if(accumAlpha >= 0.99){
-                    hit = true;
-                    hitDist = firstHitT;
-                    normal = GRASS_LIGHT_NORMAL;
-                    break;
+                    hitCol = mix(hitCol, grassCol, accumAlpha);
+                    if(accumAlpha >= 0.99){
+                        hit = true;
+                        hitDist = firstHitT;
+                        normal = GRASS_LIGHT_NORMAL;
+                        break;
+                    }
                 }
-            }
         }
         else if(id < 251u && !isGrass) {
             hit = true;
@@ -475,22 +520,31 @@ void main(){
                 texUV = local.xy;
                 if(step.z > 0) texUV.x = 1.0 - texUV.x;
             }
-
-            vec2 texSize = vec2(textureSize(uBlockTextures, 0).xy);
-    
-            float sharpness = 2.0; 
-            float K = (1.0 / iResolution.y) * sharpness; 
-
+            // --- Compute mip level for anti-aliasing / shimmering ---
+            float maxMip = float(textureQueryLevels(uBlockTextures) - 1);
+            float sharpness = 2.0;
+            float K = (1.0 / iResolution.y) * sharpness;
             float angleCorrection = max(abs(dot(rd, normal)), 0.001);
             float footprint = (hitDist * K) / angleCorrection;
 
-            float mip = log2(footprint * texSize.x);
-
-            float maxMip = float(textureQueryLevels(uBlockTextures) - 1);
+            // Convert footprint to mip level
+            float mip = log2(footprint * vec2(textureSize(uBlockTextures, 0)).x);
             mip = clamp(mip, 0.0, maxMip);
+            int mipLevel = int(floor(mip));
 
-            hitCol = textureLod(uBlockTextures, vec3(texUV, float(id)), mip).rgb;
-            if(id == 2u) hitCol *= FOLIAGE_TINT;
+            // Get texel coordinates for nearest sampling at that mip
+            ivec2 mipSize = ivec2(textureSize(uBlockTextures, mipLevel));
+            ivec2 pixelCoord = ivec2(floor(texUV * vec2(mipSize)));
+            pixelCoord = clamp(pixelCoord, ivec2(0), mipSize - 1);
+
+            // --- Nearest texel fetch ---
+            vec3 texSample = texelFetch(uBlockTextures, ivec3(pixelCoord, int(id)), mipLevel).rgb;
+
+            // Apply foliage tint if needed
+            if(id == 2u) texSample *= FOLIAGE_TINT;
+
+            // Set final hit color
+            hitCol = texSample;
 
             break;
         }
