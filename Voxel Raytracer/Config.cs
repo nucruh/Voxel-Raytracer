@@ -1,11 +1,18 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.Json;
 
 namespace Voxel_Raytracer
 {
+
+
+
     public class Config
     {
+
+        public static Dictionary<int, List<string>> blocks;
+
         public static readonly Config Instance = new Config();
 
         public int width = 1920;
@@ -23,7 +30,16 @@ namespace Voxel_Raytracer
         public int worldHeightChunks = 4;
         public int worldSize = 4;
 
-        private Config() { } // private constructor
+        static Config()
+        {
+            string json = File.ReadAllText("JSONConfigs/blockTags.json");
+            blocks = JsonSerializer.Deserialize<Dictionary<int, List<string>>>(json)!;
+        }
+        
+
+
+
+        private Config() { }
 
 
 

@@ -61,7 +61,7 @@ vec3 GetBlockNormal(int mask, ivec3 step){
     else               return vec3(0, 0, -step.z);
 }
 
-// ---------- utilities ----------
+// util
 float hash21(vec2 p){
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
@@ -77,7 +77,7 @@ vec3 safeDeltaDist(vec3 rd){
     ));
 }
 
-// ---------- godrays ----------
+// godrays
 float ComputeGodRaysFast(vec3 ro, vec3 rd, float maxDist){
     float stepSize = maxDist / float(GODRAY_STEPS);
     float illum = 0.0;
@@ -105,11 +105,13 @@ bool IntersectGrass(
     bool hit = false;
 
     const float W = 0.5;
-    const float ROT = 0.70710678; // cos(45°)
+    const float ROT = 0.70710678; // cos 45
 
-    // Wind parameters
-    float windSpeed = 2.0;       // speed of sway
-    float windStrength = 0.15;   // horizontal offset
+
+    //  wtf why sway no worke idk
+    // wind params
+    float windSpeed = 2.0;
+    float windStrength = 0.15;
     float windPhase = hash21(vec2(voxel.x, voxel.z)) * 6.28318;
 
     // Two crossed planes
@@ -120,43 +122,31 @@ bool IntersectGrass(
 
     for(int i = 0; i < 2; i++){
         vec3 n = planes[i];
-        vec3 swayDir = vec3(-n.z, 0.0, n.x); // horizontal along blade
+        vec3 swayDir = vec3(-n.z, 0.0, n.x);
 
         float denom = dot(rd, n);
         if(abs(denom) < 1e-6) continue;
 
-        // Plane intersection
         float t = dot(vec3(0.5) - o, n) / denom;
         if(t <= 0.0 || t >= bestT) continue;
 
         vec3 p = o + rd * t;
         if(p.y < 0.0 || p.y > 1.0) continue;
 
-        // Width check
         vec3 d = p - vec3(0.5);
         float side = dot(d, swayDir);
         if(abs(side) > W) continue;
 
-        // ------------------------
-        // Compute swaying offset
-        // ------------------------
-        float swayFactor = pow(p.y, 2.0); // top moves more
+        float swayFactor = pow(p.y, 2.0);
         float wave = sin(iTime * windSpeed + windPhase + float(i) * 1.57) 
                      * windStrength * swayFactor;
 
-        // Offset the intersection point for visual sway
         vec3 pSway = p + swayDir * wave;
 
-        // UV coordinates for texture
         vec2 texUV;
-        texUV.y = p.y; // vertical along blade
+        texUV.y = p.y;
         texUV.x = clamp(dot(pSway - vec3(0.5), swayDir) / W * 0.5 + 0.5, 0.0, 1.0);
 
-
-
-
-
-        // Sample texture
         vec4 texSample = texture(uBlockTextures, vec3(texUV, 7));
 
         if(texSample.a > 0.0){
@@ -173,7 +163,7 @@ bool IntersectGrass(
 }
 
 
-// ---------- shadow trace ----------
+// shadow trace
 bool TraceShadow(vec3 startPos){
     vec3 rd = -SUN_DIR;
     vec3 posf = startPos + rd * SHADOW_BIAS;
@@ -207,7 +197,7 @@ bool TraceShadow(vec3 startPos){
             0
         ).r;
 
-        // Check SVO sizes
+        // get svo sizes
         int svoSize = 1;
         int svoMask = 0;
         if(id == 253u) { svoSize = 16; svoMask = 15; }  // 16
@@ -222,7 +212,6 @@ bool TraceShadow(vec3 startPos){
             vec3 boxMin = vec3(regionBase);
             vec3 boxMax = boxMin + vec3(svoSize);
 
-            // Ray-box intersection
             vec3 invDir = 1.0 / rd;
             vec3 t0 = (boxMin - uCamPos) * invDir;
             vec3 t1 = (boxMax - uCamPos) * invDir;
@@ -235,19 +224,15 @@ bool TraceShadow(vec3 startPos){
 
             if(tExit <= tEnter) continue;
 
-            // Use a very small epsilon to nudge into the next voxel
+            // nudge into next voxel
             float epsilon = 0.001; 
             t = tExit + epsilon; 
 
-            // Sync the mapPos and sideDist to the NEW position after the jump
             vec3 jumpPos = uCamPos + rd * t;
             mapPos = ivec3(floor(jumpPos));
 
-            // IMPORTANT: You must fully refresh sideDist here
             sideDist = (vec3(step) * (vec3(mapPos) - uCamPos + 0.5 + vec3(step) * 0.5)) * deltaDist;
     
-            // Also re-calculate sideDist based on the standard DDA formula 
-            // to ensure the next loop iteration doesn't use old data
             sideDist = vec3(
                 ((rd.x < 0.0) ? (jumpPos.x - float(mapPos.x)) : (float(mapPos.x + 1.0) - jumpPos.x)) * deltaDist.x,
                 ((rd.y < 0.0) ? (jumpPos.y - float(mapPos.y)) : (float(mapPos.y + 1.0) - jumpPos.y)) * deltaDist.y,
@@ -261,7 +246,7 @@ bool TraceShadow(vec3 startPos){
         // Hit solid voxel
         if(id < 251u && (id < 128u || id > 130u)) return true;
 
-        // Step to next voxel
+        // next voxel
         if(sideDist.x < sideDist.y){
             if(sideDist.x < sideDist.z){ sideDist.x+=deltaDist.x; mapPos.x+=step.x; }
             else{ sideDist.z+=deltaDist.z; mapPos.z+=step.z; }
@@ -274,7 +259,7 @@ bool TraceShadow(vec3 startPos){
     return false;
 }
 
-// ---------- 3D noise & fbm ----------
+// 3d noise, fbm
 float hash31(vec3 p){
     p = fract(p * vec3(123.34, 456.21, 789.56));
     p += dot(p, p + 45.32);
@@ -317,14 +302,14 @@ float fbm3(vec3 p){
     return v;
 }
 
-// ---------- volumetric cloud density ----------
+// volumetric cloud densityx
 float SampleCloudDensity(vec3 p)
 {
     float blockSize = CLOUD_BLOCK_SIZE;
     vec3 blockPos = floor(p / blockSize);
     vec3 localPos = fract(p / blockSize); 
 
-    // 3D FBM for density
+    //3d fbm
     vec3 noisePos = blockPos * 0.04 + iTime * 0.02;
     float density = fbm3(noisePos);
 
@@ -360,8 +345,9 @@ void main(){
     float t = 0.0;
     float hitDist = 0.0;
 
+    // voxel DDA
     for(int i = 0; i < MAX_STEPS; i++){
-        // World bounds check
+        // world bounds
         if(any(lessThan(mapPos, ivec3(0))) ||
            mapPos.x >= WORLD_VOX_X || mapPos.y >= WORLD_VOX_Y || mapPos.z >= WORLD_VOX_Z)
             break;
@@ -373,14 +359,13 @@ void main(){
 
         ivec3 localMapPos = mapPos & CHUNK_MASK;
 
-        // Fetch voxel ID
         uint id = texelFetch(
             uVoxelTex[chunkIndex],
             ivec3(localMapPos.z, localMapPos.y, localMapPos.x),
             0
         ).r;
 
-        // Determine SVO size for this voxel
+        // get svo size for voxel
         int svoSize = 1;
         int svoMask = 0;
         if(id == 253u) { svoSize = 16; svoMask = 15; }  // 16
@@ -468,12 +453,8 @@ void main(){
         else if(id < 251u && !isGrass) {
             hit = true;
     
-            // 1. Get the normal FIRST so we can use it for Mip/UV calculations
             normal = GetBlockNormal(mask, step);
 
-            // 2. Stable hit distance calculation
-            // Instead of using the 't' accumulator, calculate distance to the hit face plane.
-            // This prevents "shimmering" or "stair-stepping" in the texture LOD.
             if (mask == 0)      hitDist = (float(mapPos.x + (step.x <= 0 ? 1 : 0)) - uCamPos.x) / rd.x;
             else if (mask == 1) hitDist = (float(mapPos.y + (step.y <= 0 ? 1 : 0)) - uCamPos.y) / rd.y;
             else                hitDist = (float(mapPos.z + (step.z <= 0 ? 1 : 0)) - uCamPos.z) / rd.z;
@@ -495,23 +476,16 @@ void main(){
                 if(step.z > 0) texUV.x = 1.0 - texUV.x;
             }
 
-            // 3. Analytically calculate Mip Level
             vec2 texSize = vec2(textureSize(uBlockTextures, 0).xy);
     
-            // TUNING: Increase 'sharpness' if it's too blurry, decrease if aliasing.
-            // 1.5 to 2.0 is usually the sweet spot for voxel engines.
             float sharpness = 2.0; 
             float K = (1.0 / iResolution.y) * sharpness; 
 
-            // Calculate footprint: how many world-units a pixel covers
-            // We use max() to prevent division by zero on glancing angles
             float angleCorrection = max(abs(dot(rd, normal)), 0.001);
             float footprint = (hitDist * K) / angleCorrection;
 
-            // Scale footprint by texture resolution (e.g., 16x16) to find texel coverage
             float mip = log2(footprint * texSize.x);
 
-            // Clamp to valid range
             float maxMip = float(textureQueryLevels(uBlockTextures) - 1);
             mip = clamp(mip, 0.0, maxMip);
 
@@ -520,7 +494,7 @@ void main(){
 
             break;
         }
-        // Step to next voxel
+        // step to next voxel
         if(sideDist.x < sideDist.y){
             if(sideDist.x < sideDist.z){ t=sideDist.x; sideDist.x+=deltaDist.x; mapPos.x+=step.x; mask=0; }
             else{ t=sideDist.z; sideDist.z+=deltaDist.z; mapPos.z+=step.z; mask=2; }

@@ -74,7 +74,7 @@ namespace Voxel_Raytracer
 
             if (emptyChunk)
             {
-                //result[0] = 255;
+                result[0] = 255;
                 //FillRegionID(result, chunkSize, 0, 0, 0, 255);
 
                 return (result, outOfBounds);
@@ -97,7 +97,7 @@ namespace Voxel_Raytracer
 
                         if (above1 >= arraySize || above2 >= arraySize) continue;
                         // keep blocks on high elevations stone
-                        if (y + offset.Y > 150) continue;
+                        if (y + offset.Y > 127) continue;
 
                         // could maybe omit since not using 3d perlin anymore????? !
                         if (result[above1] == 254 && result[above2] == 254)
@@ -209,7 +209,10 @@ namespace Voxel_Raytracer
 
                 if (above > arraySize -1) continue;
 
-                if (next > 0.7)
+                if (next > 0.8)
+                    continue;
+
+                if (next > 0.6)
                 {
                     result[above] = 128;
                     continue;
@@ -265,6 +268,9 @@ namespace Voxel_Raytracer
              * sx - subregion x
 
             */
+
+            if (result[0] == 255)
+                result[0] = 254;
 
             bool fullyEmpty = refillAir;
 
@@ -377,7 +383,6 @@ namespace Voxel_Raytracer
                     }
 
             // 128x128x128 (combine 8 64x64x64 regions)
-            // Note: Since chunkSize is 128, this checks if the entire chunk is empty.
             int l4 = 128;
             int stepl4 = 64;
 

@@ -292,6 +292,17 @@ namespace Voxel_Raytracer
             Interactions.PlacedEvent(selectedBlock, newVID, newCID);
         }
 
+        public static bool HasTag(byte blockId, string tag)
+        {
+            return Config.blocks.TryGetValue(blockId, out var list) && list.Contains(tag);
+        }
+
+        public static string GetBlockName(byte blockId)
+        {
+            if (Config.blocks.TryGetValue(blockId, out var list) && list.Count > 0)
+                return list[0];
+            return "Unknown";
+        }
 
     }
 }

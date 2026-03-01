@@ -1,0 +1,16 @@
+{
+    "0": ["Stone"],
+    "1": ["Dirt"],
+    "2": ["Grass"],
+    "3": ["Birch Log"],
+    "4": ["Pine Log"],
+    "5": ["Birch Leaves"],
+    "6": ["Pine Leaves"],
+    "7": ["Explosives"],
+    "8": ["Detonator"],
+
+    "128": ["Tall Grass", "RequiresBlock"],
+    "129": ["Medium Grass", "RequiresBlock"],
+    "130": ["Short Grass", "RequiresBlock"]
+
+}

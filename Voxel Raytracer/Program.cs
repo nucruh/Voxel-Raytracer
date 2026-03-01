@@ -604,7 +604,7 @@ namespace Voxel_Raytracer
                 $"world: {voxelCount / 10e5:f1}m voxels {worldSize}x{worldSize}x{worldSize} chunks\n"+
                 $"Terrain generated in: {generationTime:f1}ms with an average of {(generationTime) / (ActiveChunks != null ? ActiveChunks.Length : 1):f2}ms per chunk\n" +
                 $"SVO and chunk upload in: {svoTime:f1}ms with an average of {(svoTime) / (ActiveChunks != null ? ActiveChunks.Length : 1):f2}ms per chunk\n" +
-                $"system: {width}x{height}, {Environment.ProcessorCount} processors, {(voxelCount * 1) / 1024 / 1024}MiB for voxels\n C4",
+                $"system: {width}x{height}, {Environment.ProcessorCount} processors, {(voxelCount * 1) / 1024 / 1024}MiB for voxels",
                 marginScaleX,
                 marginScaleY,
                 240, 240, 240,
@@ -613,7 +613,7 @@ namespace Voxel_Raytracer
 
             _textRenderer.RenderText(
                 $"pos: {Math.Round(camPos.X, 2)}, {Math.Round(camPos.Y, 2)}, {Math.Round(camPos.Z, 2)}\n" +
-                $"looking at {hitId} @ ({vx}, {vy}, {vz})",
+                $"looking at {VoxelUtil.GetBlockName((byte)hitId)} @ ({vx}, {vy}, {vz})",
                 marginScaleX,
                 marginScaleY + lineSpacingScale * 6,
                 240, 180, 50,
@@ -630,7 +630,7 @@ namespace Voxel_Raytracer
 
             // Example for bottom-right HUD element (normalized coordinates)
             _textRenderer.RenderText(
-                $"Selected: {selectedBlock}",
+                $"Selected: {VoxelUtil.GetBlockName(selectedBlock)}",
                 10f / width,
                 0.98f - _textRenderer.GetHeight(1.0f) / height,
                 255, 255, 255,
