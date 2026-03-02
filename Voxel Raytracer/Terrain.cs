@@ -74,7 +74,7 @@ namespace Voxel_Raytracer
 
             if (emptyChunk)
             {
-                result[0] = 255;
+                //result[0] = 255;
                 //FillRegionID(result, chunkSize, 0, 0, 0, 255);
 
                 return (result, outOfBounds);

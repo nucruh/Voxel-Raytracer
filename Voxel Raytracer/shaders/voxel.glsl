@@ -394,7 +394,7 @@ void main(){
             sideDist.x = ((step.x < 0) ? (uCamPos.x - float(mapPos.x)) : (float(mapPos.x + 1) - uCamPos.x)) * deltaDist.x;
             sideDist.y = ((step.y < 0) ? (uCamPos.y - float(mapPos.y)) : (float(mapPos.y + 1) - uCamPos.y)) * deltaDist.y;
             sideDist.z = ((step.z < 0) ? (uCamPos.z - float(mapPos.z)) : (float(mapPos.z + 1) - uCamPos.z)) * deltaDist.z;
-
+            
 
             continue;
         }
