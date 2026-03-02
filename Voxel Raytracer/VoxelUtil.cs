@@ -12,7 +12,9 @@ namespace Voxel_Raytracer
         private static Config config => Config.Instance;
         static int width => config.width;
         static int height => config.height;
-        static int worldSize => config.worldSize;
+        static int worldSizeX => config.worldSize;
+        static int worldSizeZ => config.worldSize;
+        static int worldSizeY => config.worldHeightChunks;
         static int chunkSize => config.chunkSize;
         static int voxelsPerChunk = chunkSize * chunkSize * chunkSize;
         private const float playerWidth = 0.2f;
@@ -77,10 +79,10 @@ namespace Voxel_Raytracer
                 if (localZ < 0) { localZ += chunkSize; cz--; }
 
                 if (cx < 0 || cy < 0 || cz < 0 ||
-                    cx >= worldSize || cy >= worldSize || cz >= worldSize)
+                    cx >= worldSizeX || cy >= worldSizeY || cz >= worldSizeZ)
                     break;
 
-                cId = (cx * worldSize + cz) * worldSize + cy;
+                cId = VoxelUtil.ChunkIDfromXYZ(cx, cy, cz);
                 Chunk chunk = chunks[cId];
 
                 vId = localZ + chunkSize * (localY + chunkSize * localX);
@@ -153,10 +155,10 @@ namespace Voxel_Raytracer
             int cy = (int)Math.Floor(pos.Y / chunkSize);
             int cz = (int)Math.Floor(pos.Z / chunkSize);
 
-            if (cx < 0 || cy < 0 || cz < 0 || cx >= worldSize || cy >= worldSize || cz >= worldSize)
+            if (cx < 0 || cy < 0 || cz < 0 || cx >= worldSizeX || cy >= worldSizeY || cz >= worldSizeZ)
                 return true;
 
-            int cId = (cx * worldSize + cz) * worldSize + cy;
+            int cId = VoxelUtil.ChunkIDfromXYZ(cx, cy, cz);
 
             int vx = (int)Math.Floor(pos.X) % chunkSize;
             int vy = (int)Math.Floor(pos.Y) % chunkSize;
@@ -211,13 +213,13 @@ namespace Voxel_Raytracer
             return Renderer.ActiveChunks[cId].voxelData[vId];
         }
 
-        public static (int, int, int) ChunkXYZfromChunkID(int cId, out int cx, out int cy, out int cz)
+        public static void ChunkXYZfromChunkID(int cId,
+            out int cx, out int cy, out int cz)
         {
-            cx = cId / (worldSize * worldSize);
-            cz = (cId / worldSize) % worldSize;
-            cy = cId % worldSize;
-
-            return (cx, cy, cz);
+            cx = cId / (worldSizeY * worldSizeZ);
+            int rem = cId % (worldSizeY * worldSizeZ);
+            cz = rem / worldSizeY;
+            cy = rem % worldSizeY;
         }
 
         public static (int, int, int) VoxelXYZfromVoxelID(int vId, out int x, out int y, out int z)
@@ -230,7 +232,9 @@ namespace Voxel_Raytracer
 
         public static int ChunkIDfromXYZ(int cx, int cy, int cz)
         {
-            return (cx * worldSize + cz) * worldSize + cy;
+            return cx * (worldSizeY * worldSizeZ)
+                 + cz * worldSizeY
+                 + cy;
         }
 
         public static int VoxelIDfromXYZ(int x, int y, int z)

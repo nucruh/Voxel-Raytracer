@@ -15,8 +15,8 @@ namespace Voxel_Raytracer
 
         public static readonly Config Instance = new Config();
 
-        public int width = 1920;
-        public int height = 1080;
+        public int width = 2560;
+        public int height = 1440;
 
         public float mouseSensitivity = 0.0015f;
         public float moveSpeed = 30f;
@@ -27,8 +27,8 @@ namespace Voxel_Raytracer
         public double squishFactor = 42.0;
         public int chunkSize = 128;
 
-        public int worldHeightChunks = 4;
-        public int worldSize = 4;
+        public int worldHeightChunks = 3;
+        public int worldSize = 32;
 
         static Config()
         {

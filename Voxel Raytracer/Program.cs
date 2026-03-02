@@ -37,6 +37,7 @@ namespace Voxel_Raytracer
         static int width => config.width;
         static int height => config.height;
         static int worldSize => config.worldSize;
+        static int worldSizeY => config.worldHeightChunks;
 
         static int chunkSize => config.chunkSize;
 
@@ -549,7 +550,7 @@ namespace Voxel_Raytracer
             float lineSpacingScale = 30f / height;
             float textSize = 1.0f;
 
-            int voxelCount = (int)((ActiveChunks != null ? ActiveChunks.Length : 1) * Math.Pow(chunkSize, 3));
+            ulong voxelCount = (ulong)((ActiveChunks != null ? ActiveChunks.Length : 1) * Math.Pow((ulong)chunkSize, 3));
 
 
             int hitId = -1;
@@ -569,7 +570,7 @@ namespace Voxel_Raytracer
 
             _textRenderer.RenderText(
                 $"{fpsString}\n" +
-                $"world: {voxelCount / 10e5:f1}m voxels {worldSize}x{worldSize}x{worldSize} chunks\n"+
+                $"world: {voxelCount / 10e5:f1}m voxels {worldSize}x{worldSizeY}x{worldSize} chunks\n"+
                 $"Terrain generated in: {generationTime:f1}ms with an average of {(generationTime) / (ActiveChunks != null ? ActiveChunks.Length : 1):f2}ms per chunk\n" +
                 $"SVO and chunk upload in: {svoTime:f1}ms with an average of {(svoTime) / (ActiveChunks != null ? ActiveChunks.Length : 1):f2}ms per chunk\n" +
                 $"system: {width}x{height}, {Environment.ProcessorCount} processors, {(voxelCount * 1) / 1024 / 1024}MiB for voxels",
