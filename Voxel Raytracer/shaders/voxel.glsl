@@ -317,6 +317,7 @@ float SampleCloudDensity(vec3 p)
 
 // ---------- main ----------
 void main(){
+
     vec2 uv = (gl_FragCoord.xy/iResolution)*2.0-1.0;
     uv.x *= iResolution.x/iResolution.y;
 

@@ -6,3 +6,4 @@
 using System.Diagnostics.CodeAnalysis;
 
 [assembly: SuppressMessage("Interoperability", "CA1416:Validate platform compatibility", Justification = "<Pending>", Scope = "member", Target = "~M:Voxel_Raytracer.Renderer.LoadBlockTexture(System.Int32)~System.Byte[]")]
+[assembly: SuppressMessage("Interoperability", "CA1416:Validate platform compatibility", Justification = "<Pending>", Scope = "member", Target = "~M:GdiTextRenderer.#ctor(System.Int32,System.Int32,System.String,System.Single)")]

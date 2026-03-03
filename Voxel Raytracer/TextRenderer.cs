@@ -1,9 +1,11 @@
 ﻿using OpenTK.Graphics.OpenGL;
 using OpenTK.Mathematics;
+using System;
 using System.Drawing; // GDI+ Namespace
 using System.Drawing.Imaging;
-using System;
+using System.Drawing.Text;
 using System.IO;
+using static System.Net.Mime.MediaTypeNames;
 using PixelFormat = System.Drawing.Imaging.PixelFormat;
 
 // This replaces the complex SharpFont TextRenderer
@@ -11,13 +13,14 @@ public class GdiTextRenderer : IDisposable
 {
     private int _fontTexture;
     private int _program, _vao, _vbo;
-    private readonly int _windowWidth;
-    private readonly int _windowHeight;
+    private int _windowWidth;
+    private int _windowHeight;
     private string _lastText = "";
     private Size _lastSize;
     private float _textWidth;
     private float _textHeight;
     private System.Drawing.Font _font;
+    private PrivateFontCollection _fonts;
 
 
     public GdiTextRenderer(int width, int height, string fontName, float fontSize)
@@ -25,23 +28,21 @@ public class GdiTextRenderer : IDisposable
         _windowWidth = width;
         _windowHeight = height;
 
-        // Use a standard font file.
-        // NOTE: This relies on the font being installed on the system OR finding the .ttf file
-        // For simplicity, we use the font family name.
-        _font = new System.Drawing.Font(fontName, fontSize, System.Drawing.FontStyle.Bold);
 
-        // 1. Setup Quad Shaders (same as the previous text.vert/text.frag)
+        _fonts = new PrivateFontCollection();
+        _fonts.AddFontFile("Monocraft.ttc");
+
+        _font = new System.Drawing.Font(_fonts.Families[0], fontSize, System.Drawing.FontStyle.Bold);
+
         _program = LoadTextShader("shaders/text.vert", "shaders/text.frag");
 
-        // 2. Setup VAO/VBO for a single, full-screen text quad
-        // We render a quad that dynamically resizes to fit the text content.
         _vao = GL.GenVertexArray();
         _vbo = GL.GenBuffer();
 
         GL.BindVertexArray(_vao);
         GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
 
-        int stride = sizeof(float) * 4; // Position(2) + UV(2)
+        int stride = sizeof(float) * 4;
 
         GL.EnableVertexAttribArray(0);
         GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, stride, 0);
@@ -87,6 +88,7 @@ public class GdiTextRenderer : IDisposable
         return shader;
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "CA1416:Validate platform compatibility", Justification = "<Pending>")]
     private void GenerateTextTexture(string text)
     {
         if (string.IsNullOrEmpty(text))
@@ -172,6 +174,7 @@ public class GdiTextRenderer : IDisposable
     }
 
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "CA1416:Validate platform compatibility", Justification = "<Pending>")]
     public float GetHeight(float sizeScale)
     {
         string text = "0";
@@ -262,6 +265,24 @@ public class GdiTextRenderer : IDisposable
         GL.Enable(EnableCap.DepthTest);
         GL.Disable(EnableCap.Blend);
     }
+
+    public void Resize(int newWidth, int newHeight)
+    {
+        _windowWidth = newWidth;
+        _windowHeight = newHeight;
+
+        GL.UseProgram(_program);
+
+        int screenSizeLoc = GL.GetUniformLocation(_program, "uScreenSize");
+        GL.Uniform2(screenSizeLoc, (float)_windowWidth, (float)_windowHeight);
+
+        float newSize = Math.Clamp((float)Math.Round(newHeight / 270f) * 5f, 5f, 100f);
+
+        _font = new System.Drawing.Font(_fonts.Families[0], newSize, System.Drawing.FontStyle.Bold);
+
+        GL.UseProgram(0);
+    }
+
     public void Dispose()
     {
         if (_fontTexture != 0) GL.DeleteTexture(_fontTexture);
