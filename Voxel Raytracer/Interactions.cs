@@ -20,9 +20,9 @@ namespace Voxel_Raytracer
             byte selected = Renderer.selectedBlock;
 
             if (input.IsKeyDown(Keys.D1))
-                selected = 8;
+                selected = 1;
             else if (input.IsKeyDown(Keys.D2))
-                selected = 7;
+                selected = 2;
             else if (input.IsKeyDown(Keys.D3))
                 selected = 3;
             else if (input.IsKeyDown(Keys.D4))

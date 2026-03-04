@@ -483,7 +483,12 @@ namespace Voxel_Raytracer
                     VoxelUtil.VoxelXYZfromVoxelID(vId, out vx, out vy, out vz);
                     vx += (int)hitNormal.X; vy += (int)hitNormal.Y; vz += (int)hitNormal.Z;
 
-                    VoxelUtil.Place(cId, vx, vy, vz);
+                    int camVoxelX = (int)MathF.Floor(camPos.X);
+                    int camVoxelY = (int)MathF.Floor(camPos.Y);
+                    int camVoxelZ = (int)MathF.Floor(camPos.Z);
+
+                    if (vx != camVoxelX || vy != camVoxelY || vz != camVoxelZ)
+                        VoxelUtil.Place(cId, vx, vy, vz);
                 }
 
                 Stopwatch debug = Stopwatch.StartNew();
