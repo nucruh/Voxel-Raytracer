@@ -434,7 +434,7 @@ void main(){
                 accumAlpha += texSample.a;
                 firstHitT = tg;
 
-                // Second pass if not opaque
+                // second pass if not opaque
                 if(texSample.a < 0.99){
                     float tg2; vec3 gN2; float ga2;
                     vec3 ro2 = uCamPos + rd * (tg + 0.002);
@@ -443,27 +443,23 @@ void main(){
                         vec3 hitPos2 = ro2 + rd * tg2;
                         vec3 p2 = hitPos2 - vec3(mapPos);
         
-                        // 1. Reconstruct Sway for the second hit
                         vec3 swayDir2 = vec3(-gN2.z, 0.0, gN2.x);
                         float windPhase2 = hash21(vec2(mapPos.x, mapPos.z)) * 6.28318;
-                        // Determine if this is plane 0 or 1 based on the normal
+                        // plane 0 or 1 based on normal
                         float planeIdx = (abs(gN2.x - ROT) < 0.01) ? 0.0 : 1.0; 
         
                         float wave2 = sin(iTime * 2.0 + windPhase2 + planeIdx * 1.57) * 0.15 * (p2.y * p2.y);
                         vec3 pSway2 = p2 + swayDir2 * wave2;
 
-                        // 2. Map to UV
                         float u2 = (dot(pSway2 - vec3(0.5), swayDir2) / 0.5) * 0.5 + 0.5;
                         float v2 = p2.y;
 
-                        // 3. Manual Point Sample (texelFetch)
                         ivec3 texDims = textureSize(uBlockTextures, 0);
                         ivec2 pixelCoord2 = ivec2(floor(vec2(u2, v2) * vec2(texDims.xy)));
                         pixelCoord2 = clamp(pixelCoord2, ivec2(0), texDims.xy - 1);
 
                         vec4 texSample2 = texelFetch(uBlockTextures, ivec3(pixelCoord2, int(id)), 0);
         
-                        // 4. Alpha Blending
                         float a2 = texSample2.a * (1.0 - accumAlpha);
                         grassCol += texSample2.rgb * a2 * FOLIAGE_TINT;
                         accumAlpha += a2;

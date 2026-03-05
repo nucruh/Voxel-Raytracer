@@ -61,7 +61,7 @@ namespace Voxel_Raytracer
                     {
 
                         if (y >= chunkSize) break;
-                        //double lightDiff = 10 * rnd.NextDouble();
+
                         int baseIndex = (z + chunkSize * (y + chunkSize * x));
                         // solid material
                         result[baseIndex] = 0;
@@ -74,9 +74,6 @@ namespace Voxel_Raytracer
 
             if (emptyChunk)
             {
-                //result[0] = 255;
-                //FillRegionID(result, chunkSize, 0, 0, 0, 255);
-
                 return (result, outOfBounds);
             }
 
@@ -317,9 +314,6 @@ namespace Voxel_Raytracer
                                 }
                         // code here runs if whole region was air
                         FillRegionID(result, l1, ox, oy, oz, 253);
-                        //int regionHeaderIndex = oz + chunkSize * (oy + chunkSize * ox);
-                        //result[regionHeaderIndex] = 253;
-                    //
                     endOfL1:;
                     }
 

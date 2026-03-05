@@ -1,6 +1,4 @@
-﻿using System;
-using System.Security.Cryptography.X509Certificates;
-
+﻿
 public class PerlinNoise
 {
     private int[] permutation;
@@ -54,36 +52,9 @@ public class PerlinNoise
         return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
     }
 
-    // 2D noise (for backward compatibility)
-    public double Noise(double x, double y)
-    {
-        int X = (int)Math.Floor(x) & 255;
-        int Y = (int)Math.Floor(y) & 255;
 
-        x -= Math.Floor(x);
-        y -= Math.Floor(y);
-
-        double u = Fade(x);
-        double v = Fade(y);
-
-        int aa = permutation[permutation[X] + Y];
-        int ab = permutation[permutation[X] + Y + 1];
-        int ba = permutation[permutation[X + 1] + Y];
-        int bb = permutation[permutation[X + 1] + Y + 1];
-
-        double res = Lerp(
-            Lerp(Grad(aa, x, y, 0), Grad(ba, x - 1, y, 0), u),
-            Lerp(Grad(ab, x, y - 1, 0), Grad(bb, x - 1, y - 1, 0), u),
-            v
-        );
-
-        return (res + 1.0) / 2.0;
-    }
-
-    // 3D noise (use this for voxel terrain)
     public double Noise(double x, double y, double z)
     {
-        // Avoid redundant calculations
         int X = (int)Math.Floor(x) & 255;
         int Y = (int)Math.Floor(y) & 255;
         int Z = (int)Math.Floor(z) & 255;
@@ -92,12 +63,10 @@ public class PerlinNoise
         y -= Math.Floor(y);
         z -= Math.Floor(z);
 
-        // Store Fade values to avoid recalculation
         double u = Fade(x);
         double v = Fade(y);
         double w = Fade(z);
 
-        // Hashing using permutation array
         int aaa = permutation[permutation[permutation[X] + Y] + Z];
         int aba = permutation[permutation[permutation[X] + Y + 1] + Z];
         int aab = permutation[permutation[permutation[X] + Y] + Z + 1];
@@ -107,7 +76,6 @@ public class PerlinNoise
         int bab = permutation[permutation[permutation[X + 1] + Y] + Z + 1];
         int bbb = permutation[permutation[permutation[X + 1] + Y + 1] + Z + 1];
 
-        // Using precomputed Fade values
         double res = Lerp(
             Lerp(
                 Lerp(Grad(aaa, x, y, z), Grad(baa, x - 1, y, z), u),
@@ -122,7 +90,7 @@ public class PerlinNoise
             w
         );
 
-        return (res + 1.0) / 2.0; // Normalize to 0..1
+        return (res + 1.0) / 2.0;
     }
 
 
@@ -133,24 +101,21 @@ public class PerlinNoise
         double amplitude = this.amplitude;
         double frequency = this.frequency;
 
-        double sharpness = 15; // Options.sharpness
+        double sharpness = 15;
         double reverseSharp = 15;
 
-        // Terrain noise for blending
         double terrainNoiseFreq = 0.005;
         double terrainNoise = Noise(x * terrainNoiseFreq, y * terrainNoiseFreq, z * terrainNoiseFreq);
         double blendFactor = terrainNoise;
 
         int octaveCount = 4;
 
-        // Erosion map
         double erosionNoiseFreq = 0.175;
         double erosion = Noise(x * erosionNoiseFreq, y * erosionNoiseFreq, z * erosionNoiseFreq);
         erosion = Math.Clamp(erosion, 0, 1);
 
-        // Height modifier using linear spline with SmoothStep
         double[,] splinePoints = new double[,] { { 0.0, 0 }, { 0.25, 7 }, { 0.3, 18 }, { 0.6, 30 }, { 0.8, 100 }, {1.0, 160} };
-        double heightMod = splinePoints[splinePoints.GetLength(0) - 1, 1]; // default to last point
+        double heightMod = splinePoints[splinePoints.GetLength(0) - 1, 1];
 
         for (int i = 0; i < splinePoints.GetLength(0) - 1; i++)
         {
@@ -163,7 +128,6 @@ public class PerlinNoise
             {
                 double t = (erosion - x0) / (x1 - x0);
 
-                // SmoothStep interpolation
                 t = t * t * (3 - 2 * t);
 
                 heightMod = y0 + t * (y1 - y0);
@@ -173,22 +137,18 @@ public class PerlinNoise
 
         heightModifier = heightMod;
 
-        // Adjust sharpness
         sharpness *= heightMod / 200.0;
         reverseSharp /= (heightMod * 200.0);
 
 
         for (int i = 0; i < octaveCount; i++)
         {
-            // 3D noise using full x, y, z
             double noiseValue = Noise(x * frequency, y * frequency, z * frequency);
 
-            // terrainFunction: plain*(1-blend) + hill*blend
             double plain = noiseValue;
             double hill = noiseValue * noiseValue;
             double blended = plain * (1 - blendFactor) + hill * blendFactor;
 
-            // ridgeFunction
             double ridge = 1.0 - Math.Abs(blended - 0.5) * 2.0;
             double ridgeValue = Math.Pow(ridge, sharpness);
 
@@ -198,8 +158,8 @@ public class PerlinNoise
             frequency *= lacunarity;
         }
 
-        result /= octaveCount;      // Average over octaves
-        result += heightMod / 20;   // Add height modifier
+        result /= octaveCount;
+        result += heightMod / 20;
         result = Math.Clamp(result, 0, 255);
 
         return result;
