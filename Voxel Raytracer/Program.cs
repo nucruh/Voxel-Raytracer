@@ -119,7 +119,7 @@ namespace Voxel_Raytracer
             ClientSize = new Vector2i(width, height),
             Title = "Voxel Engine",
             APIVersion = new Version(4, 3),
-            Vsync = OpenTK.Windowing.Common.VSyncMode.Off,
+            Vsync = OpenTK.Windowing.Common.VSyncMode.On,
             Location = new Vector2i(screenWidth / 2 - width / 2, screenHeight / 2 - height / 2),
             NumberOfSamples = 4,
             WindowBorder = OpenTK.Windowing.Common.WindowBorder.Resizable,
@@ -430,8 +430,9 @@ namespace Voxel_Raytracer
                 pitch -= mouse.Delta.Y * mouseSensitivity;
                 pitch = MathHelper.Clamp(pitch, -MathF.PI / 2 + 0.01f, MathF.PI / 2 - 0.01f);
 
-                float delta = moveSpeed * (float)deltaTime;
-                if (input.IsKeyDown(Keys.LeftShift)) delta *= 0.07f;
+                float delta = moveSpeed * (float)deltaTime * 0.7f;
+                if (input.IsKeyDown(Keys.LeftShift)) delta *= 0.08f;
+                if (input.IsKeyDown(Keys.LeftControl)) delta *= 5f;
 
                 Vector3 moveDir = Vector3.Zero;
                 if (input.IsKeyDown(Keys.W)) moveDir += cameraForward;
@@ -483,9 +484,9 @@ namespace Voxel_Raytracer
                     VoxelUtil.VoxelXYZfromVoxelID(vId, out vx, out vy, out vz);
                     vx += (int)hitNormal.X; vy += (int)hitNormal.Y; vz += (int)hitNormal.Z;
 
-                    int camVoxelX = (int)MathF.Floor(camPos.X);
-                    int camVoxelY = (int)MathF.Floor(camPos.Y);
-                    int camVoxelZ = (int)MathF.Floor(camPos.Z);
+                    int camVoxelX = (int)MathF.Floor(camPos.X) % 128;
+                    int camVoxelY = (int)MathF.Floor(camPos.Y) % 128;
+                    int camVoxelZ = (int)MathF.Floor(camPos.Z) % 128;
 
                     if (vx != camVoxelX || vy != camVoxelY || vz != camVoxelZ)
                         VoxelUtil.Place(cId, vx, vy, vz);

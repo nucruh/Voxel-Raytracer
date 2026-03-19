@@ -15,8 +15,6 @@ namespace Voxel_Raytracer
 
         public float resolution => config.resolution;
         public double scale => config.scale;
-        public double squishFactor => config.squishFactor;
-        public double baseHeight => config.worldHeight * 0.2;
         public int chunkSize => config.chunkSize;
 
 
@@ -44,7 +42,6 @@ namespace Voxel_Raytracer
             for (int x = 0; x < chunkSize; x++)
                 for (int z = 0; z < chunkSize; z++)
                 {
-                    double xzSquish = squishFactor * Math.Clamp(Math.Pow(perlin.Noise(x + offset.X, z + offset.Z, 1) + 1, 2), 0.5, 1.5);
                     double worldX = x + offset.X;
                     double worldZ = z + offset.Z;
 

@@ -100,7 +100,7 @@ namespace Voxel_Raytracer
 
                         VoxelUtil.Destroy(newCId, newVId);
 
-                        if (oldBlock == 7)
+                        if (oldBlock == 7 && newVId != voxelId)
                             C4Activated(newVId, newCId);  // chain reaction
 
 

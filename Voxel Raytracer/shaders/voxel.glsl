@@ -14,9 +14,9 @@ uniform ivec3 uVoxelDim;
 
 uniform sampler2DArray uBlockTextures;
 
-float fogEnd = 300.0;
+float fogEnd = 800.0;
 float fogStart = 50.0;
-float shadowDistance = 150.0;
+float shadowDistance = 250.0;
 float grassDistance = 200.0;
 
 const int CHUNK_SIZE = 128;
@@ -34,9 +34,9 @@ const int SVO_PWR  = 4;
 const int SVO_MASK = SVO_SIZE - 1;
 
 
-const int WORLD_SIZE_X = 4;
-const int WORLD_SIZE_Y = 4;
-const int WORLD_SIZE_Z = 4;
+const int WORLD_SIZE_X = 8;
+const int WORLD_SIZE_Y = 3;
+const int WORLD_SIZE_Z = 8;
 
 const int WORLD_VOX_X = WORLD_SIZE_X * CHUNK_SIZE;
 const int WORLD_VOX_Y = WORLD_SIZE_Y * CHUNK_SIZE;
@@ -47,7 +47,7 @@ const float GODRAY_DENSITY = 0.015;
 const float GODRAY_DECAY = 0.9;
 const float GODRAY_INTENSITY = 5.2;
 
-const int MAX_STEPS = 300;
+const int MAX_STEPS = 500;
 const vec3 SUN_DIR = normalize(vec3(1.0, -1.0, 0.5));
 const int SHADOW_STEPS = 48;
 const float SHADOW_BIAS = 0.01;
